@@ -1,5 +1,201 @@
 # =========================================================
-# REPLACE ONLY build_quarters() WITH THIS VERSION
+# TEA Institutional SEC Scanner
+# COMPLETE CORRECTED VERSION
+# =========================================================
+
+import streamlit as st
+import pandas as pd
+import requests
+import plotly.express as px
+
+# =========================================================
+# CONFIG
+# =========================================================
+
+HEADERS = {
+    "User-Agent": "TradingEnAction fsanscartier@hotmail.com"
+}
+
+st.set_page_config(
+    page_title="TEA Institutional Scanner",
+    layout="wide"
+)
+
+# =========================================================
+# GET CIK
+# =========================================================
+
+@st.cache_data
+def get_cik_from_ticker(ticker):
+
+    url = "https://www.sec.gov/files/company_tickers.json"
+
+    data = requests.get(
+        url,
+        headers=HEADERS
+    ).json()
+
+    for company in data.values():
+
+        if company["ticker"].upper() == ticker.upper():
+
+            return str(
+                company["cik_str"]
+            ).zfill(10)
+
+    return None
+
+
+# =========================================================
+# GET COMPANY FACTS
+# =========================================================
+
+@st.cache_data
+def get_company_facts(cik):
+
+    url = (
+        f"https://data.sec.gov/api/xbrl/"
+        f"companyfacts/CIK{cik}.json"
+    )
+
+    response = requests.get(
+        url,
+        headers=HEADERS
+    )
+
+    return response.json()
+
+
+# =========================================================
+# GET BEST METRIC
+# =========================================================
+
+def get_metric(data, keys):
+
+    try:
+
+        us_gaap = data["facts"]["us-gaap"]
+
+        best_df = None
+        best_latest_year = 0
+        best_key = None
+
+        for key in keys:
+
+            if key not in us_gaap:
+                continue
+
+            units = us_gaap[key]["units"]
+
+            if "USD" not in units:
+                continue
+
+            df = pd.DataFrame(
+                units["USD"]
+            )
+
+            if "fy" not in df.columns:
+                continue
+
+            years = pd.to_numeric(
+                df["fy"],
+                errors="coerce"
+            ).dropna()
+
+            if len(years) == 0:
+                continue
+
+            latest_year = years.max()
+
+            if latest_year > best_latest_year:
+
+                best_latest_year = latest_year
+                best_df = df
+                best_key = key
+
+        if best_key is not None:
+
+            st.info(
+                f"Using XBRL tag: {best_key}"
+            )
+
+        return best_df
+
+    except Exception as e:
+
+        st.error(
+            f"Metric error: {e}"
+        )
+
+    return None
+
+
+# =========================================================
+# CLEAN ANNUAL
+# =========================================================
+
+def clean_annual(df):
+
+    if df is None:
+        return None
+
+    required = [
+        "fy",
+        "fp",
+        "val",
+        "filed"
+    ]
+
+    for col in required:
+
+        if col not in df.columns:
+            return None
+
+    # Annual only
+    df = df[
+        df["fp"] == "FY"
+    ].copy()
+
+    if len(df) == 0:
+        return None
+
+    # Numeric
+    df["val"] = pd.to_numeric(
+        df["val"],
+        errors="coerce"
+    )
+
+    df = df.dropna(
+        subset=["val"]
+    )
+
+    # Filed date
+    df["filed"] = pd.to_datetime(
+        df["filed"]
+    )
+
+    # Sort
+    df = df.sort_values(
+        ["fy", "filed"]
+    )
+
+    # Keep newest filing
+    df = df.drop_duplicates(
+        subset=["fy"],
+        keep="last"
+    )
+
+    # Sort again
+    df = df.sort_values("fy")
+
+    # Last 5 years
+    df = df.tail(5)
+
+    return df
+
+
+# =========================================================
+# BUILD TRUE QUARTERS
 # =========================================================
 
 def build_quarters(df):
@@ -21,7 +217,7 @@ def build_quarters(df):
             return None
 
     # =====================================================
-    # KEEP ONLY QUARTERLY + FY
+    # KEEP ONLY RELEVANT PERIODS
     # =====================================================
 
     df = df[
@@ -50,7 +246,7 @@ def build_quarters(df):
     )
 
     # =====================================================
-    # KEEP ONLY REAL SEC FORMS
+    # KEEP ONLY REAL FILINGS
     # =====================================================
 
     df = df[
@@ -95,7 +291,7 @@ def build_quarters(df):
         ].sort_values("filed")
 
         # =================================================
-        # Q1 FROM 10-Q
+        # Q1
         # =================================================
 
         q1 = year_df[
@@ -105,7 +301,7 @@ def build_quarters(df):
         ]["val"]
 
         # =================================================
-        # Q2 YTD FROM 10-Q
+        # Q2 YTD
         # =================================================
 
         q2 = year_df[
@@ -115,7 +311,7 @@ def build_quarters(df):
         ]["val"]
 
         # =================================================
-        # Q3 YTD FROM 10-Q
+        # Q3 YTD
         # =================================================
 
         q3 = year_df[
@@ -125,7 +321,7 @@ def build_quarters(df):
         ]["val"]
 
         # =================================================
-        # FY FROM 10-K
+        # FY
         # =================================================
 
         fy = year_df[
@@ -251,3 +447,234 @@ def build_quarters(df):
     )
 
     return result
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+
+def latest(df):
+
+    if df is None:
+        return None
+
+    if len(df) == 0:
+        return None
+
+    return df.iloc[-1]["val"]
+
+
+def add_growth(df):
+
+    if df is None:
+        return None
+
+    df = df.copy()
+
+    df["Growth %"] = (
+        df["val"]
+        .pct_change() * 100
+    )
+
+    return df
+
+
+# =========================================================
+# UI
+# =========================================================
+
+st.title(
+    "TEA Institutional SEC Scanner"
+)
+
+ticker = st.text_input(
+    "Ticker",
+    value="NVDA"
+)
+
+if st.button("Analyze"):
+
+    # =====================================================
+    # GET CIK
+    # =====================================================
+
+    cik = get_cik_from_ticker(
+        ticker
+    )
+
+    if cik is None:
+
+        st.error(
+            "Ticker not found"
+        )
+
+        st.stop()
+
+    st.success(
+        f"CIK: {cik}"
+    )
+
+    # =====================================================
+    # LOAD DATA
+    # =====================================================
+
+    data = get_company_facts(cik)
+
+    # =====================================================
+    # REVENUE
+    # =====================================================
+
+    revenue_raw = get_metric(
+        data,
+        [
+            "RevenueFromContractWithCustomerExcludingAssessedTax",
+            "SalesRevenueNet",
+            "Revenues"
+        ]
+    )
+
+    # =====================================================
+    # CLEAN
+    # =====================================================
+
+    revenue = clean_annual(
+        revenue_raw
+    )
+
+    quarterly_revenue = build_quarters(
+        revenue_raw
+    )
+
+    revenue = add_growth(
+        revenue
+    )
+
+    latest_revenue = latest(
+        revenue
+    )
+
+    latest_growth = None
+
+    if revenue is not None:
+
+        latest_growth = revenue.iloc[-1][
+            "Growth %"
+        ]
+
+    # =====================================================
+    # DISPLAY
+    # =====================================================
+
+    st.subheader(
+        "Key Metrics"
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.metric(
+            "Revenue",
+            f"${latest_revenue:,.0f}"
+            if latest_revenue
+            else "N/A"
+        )
+
+    with col2:
+
+        st.metric(
+            "Revenue Growth %",
+            f"{latest_growth:.2f}%"
+            if latest_growth is not None
+            else "N/A"
+        )
+
+    # =====================================================
+    # ANNUAL TABLE
+    # =====================================================
+
+    st.subheader(
+        "Annual Revenue"
+    )
+
+    st.dataframe(
+        revenue,
+        use_container_width=True
+    )
+
+    # =====================================================
+    # QUARTERLY TABLE
+    # =====================================================
+
+    st.subheader(
+        "Quarterly Revenue"
+    )
+
+    if quarterly_revenue is not None:
+
+        st.dataframe(
+            quarterly_revenue,
+            use_container_width=True
+        )
+
+        # Validation
+        st.subheader(
+            "Quarter Validation"
+        )
+
+        validation = (
+            quarterly_revenue
+            .groupby(
+                quarterly_revenue[
+                    "Quarter"
+                ].str[:4]
+            )["Revenue"]
+            .sum()
+            .reset_index()
+        )
+
+        validation.columns = [
+            "Year",
+            "Quarter Sum"
+        ]
+
+        st.dataframe(
+            validation,
+            use_container_width=True
+        )
+
+    else:
+
+        st.warning(
+            "Quarterly revenue unavailable"
+        )
+
+    # =====================================================
+    # CHARTS
+    # =====================================================
+
+    fig_annual = px.line(
+        revenue,
+        x="fy",
+        y="val",
+        title=f"{ticker} Annual Revenue"
+    )
+
+    st.plotly_chart(
+        fig_annual,
+        use_container_width=True
+    )
+
+    if quarterly_revenue is not None:
+
+        fig_q = px.line(
+            quarterly_revenue,
+            x="Quarter",
+            y="Revenue",
+            title=f"{ticker} Quarterly Revenue"
+        )
+
+        st.plotly_chart(
+            fig_q,
+            use_container_width=True
+        )
