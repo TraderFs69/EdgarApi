@@ -1,12 +1,12 @@
 # =========================================================
-# TEA HTML Filing Parser
-# Read REAL SEC Financial Statements
+# TEA SEC HTML Filing Parser
+# Improved Financial Table Detection
 # =========================================================
 
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
+import plotly.express as px
 
 # =========================================================
 # CONFIG
@@ -17,7 +17,7 @@ HEADERS = {
 }
 
 st.set_page_config(
-    page_title="TEA HTML Filing Parser",
+    page_title="TEA SEC Filing Parser",
     layout="wide"
 )
 
@@ -67,14 +67,14 @@ def extract_filings(submissions):
     recent = submissions["filings"]["recent"]
 
     df = pd.DataFrame({
-        "form": recent["form"],
-        "filingDate": recent["filingDate"],
-        "accessionNumber": recent["accessionNumber"],
-        "primaryDocument": recent["primaryDocument"]
+        "Form": recent["form"],
+        "Filing Date": recent["filingDate"],
+        "Accession Number": recent["accessionNumber"],
+        "Primary Document": recent["primaryDocument"]
     })
 
     filings = df[
-        df["form"].isin(["10-K", "10-Q"])
+        df["Form"].isin(["10-K", "10-Q"])
     ].copy()
 
     return filings
@@ -121,33 +121,74 @@ def extract_tables_from_html(html):
         return []
 
 
-def find_income_statement_tables(tables):
+# =========================================================
+# IMPROVED FINANCIAL TABLE DETECTION
+# =========================================================
+
+def find_financial_tables(tables):
 
     keywords = [
         "revenue",
+        "revenues",
         "net income",
         "operating income",
-        "gross profit"
+        "gross profit",
+        "assets",
+        "liabilities",
+        "cash flows",
+        "cash flow",
+        "earnings per share",
+        "cost of revenue",
+        "operating expenses",
+        "stockholders’ equity",
+        "shareholders’ equity",
+        "total assets",
+        "total liabilities"
     ]
 
-    matching_tables = []
+    results = []
 
-    for i, table in enumerate(tables):
+    for idx, table in enumerate(tables):
 
-        table_str = str(table).lower()
+        try:
 
-        matches = sum(
-            keyword in table_str
-            for keyword in keywords
-        )
+            table_str = str(table).lower()
 
-        if matches >= 2:
+            score = 0
 
-            matching_tables.append(
-                (i, table)
-            )
+            matched_keywords = []
 
-    return matching_tables
+            for keyword in keywords:
+
+                if keyword in table_str:
+
+                    score += 1
+                    matched_keywords.append(keyword)
+
+            # Ignore useless tiny tables
+            if (
+                score >= 3
+                and len(table.columns) >= 2
+                and len(table) >= 4
+            ):
+
+                results.append({
+                    "index": idx,
+                    "score": score,
+                    "keywords": matched_keywords,
+                    "table": table
+                })
+
+        except:
+            pass
+
+    results = sorted(
+        results,
+        key=lambda x: x["score"],
+        reverse=True
+    )
+
+    return results
 
 
 # =========================================================
@@ -155,7 +196,7 @@ def find_income_statement_tables(tables):
 # =========================================================
 
 st.title(
-    "TEA HTML SEC Filing Parser"
+    "TEA SEC HTML Filing Parser"
 )
 
 ticker = st.text_input(
@@ -180,7 +221,7 @@ if st.button("Load Filings"):
     st.success(f"CIK Found: {cik}")
 
     # =====================================================
-    # GET FILINGS
+    # GET SUBMISSIONS
     # =====================================================
 
     submissions = get_company_submissions(cik)
@@ -190,7 +231,7 @@ if st.button("Load Filings"):
     filings = filings.head(10)
 
     # =====================================================
-    # BUILD URLS
+    # BUILD URLs
     # =====================================================
 
     filing_urls = []
@@ -199,8 +240,8 @@ if st.button("Load Filings"):
 
         filing_url = build_filing_url(
             cik,
-            row["accessionNumber"],
-            row["primaryDocument"]
+            row["Accession Number"],
+            row["Primary Document"]
         )
 
         filing_urls.append(filing_url)
@@ -211,7 +252,9 @@ if st.button("Load Filings"):
     # DISPLAY FILINGS
     # =====================================================
 
-    st.subheader("Recent 10-K / 10-Q Filings")
+    st.subheader(
+        "Recent 10-K / 10-Q Filings"
+    )
 
     st.dataframe(
         filings,
@@ -227,8 +270,8 @@ if st.button("Load Filings"):
     for idx, row in filings.iterrows():
 
         label = (
-            f"{row['form']} | "
-            f"{row['filingDate']}"
+            f"{row['Form']} | "
+            f"{row['Filing Date']}"
         )
 
         filing_options[label] = row["SEC URL"]
@@ -242,25 +285,35 @@ if st.button("Load Filings"):
         selected_filing
     ]
 
+    st.markdown(
+        f"### SEC Filing URL"
+    )
+
     st.write(filing_url)
 
     # =====================================================
     # DOWNLOAD HTML
     # =====================================================
 
-    with st.spinner("Downloading filing..."):
+    with st.spinner(
+        "Downloading filing..."
+    ):
 
         html = download_filing_html(
             filing_url
         )
 
-    st.success("Filing downloaded")
+    st.success(
+        "Filing downloaded"
+    )
 
     # =====================================================
     # EXTRACT TABLES
     # =====================================================
 
-    with st.spinner("Extracting tables..."):
+    with st.spinner(
+        "Extracting HTML tables..."
+    ):
 
         tables = extract_tables_from_html(
             html
@@ -275,7 +328,7 @@ if st.button("Load Filings"):
     # =====================================================
 
     financial_tables = (
-        find_income_statement_tables(
+        find_financial_tables(
             tables
         )
     )
@@ -285,7 +338,7 @@ if st.button("Load Filings"):
     # =====================================================
 
     st.subheader(
-        "Financial Statement Tables"
+        "Detected Financial Tables"
     )
 
     if len(financial_tables) == 0:
@@ -296,13 +349,30 @@ if st.button("Load Filings"):
 
     else:
 
-        for idx, table in financial_tables:
+        for item in financial_tables:
+
+            idx = item["index"]
+
+            score = item["score"]
+
+            keywords = item["keywords"]
+
+            table = item["table"]
 
             st.markdown(
-                f"### Table {idx}"
+                f"""
+                ### Table {idx}
+
+                **Detection Score:** {score}
+
+                **Keywords Found:**  
+                {', '.join(keywords)}
+                """
             )
 
             st.dataframe(
                 table,
                 use_container_width=True
             )
+
+            st.markdown("---")
