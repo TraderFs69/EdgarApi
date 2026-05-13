@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# FINAL STABLE VERSION
+# TRUE QUARTER NORMALIZATION VERSION
 # =========================================================
 
 import streamlit as st
@@ -77,46 +77,41 @@ def get_metric(data, keys):
         us_gaap = data["facts"]["us-gaap"]
 
         best_df = None
-
         best_latest_year = 0
-
         best_key = None
 
         for key in keys:
 
-            if key in us_gaap:
+            if key not in us_gaap:
+                continue
 
-                units = us_gaap[key]["units"]
+            units = us_gaap[key]["units"]
 
-                if "USD" not in units:
-                    continue
+            if "USD" not in units:
+                continue
 
-                df = pd.DataFrame(
-                    units["USD"]
-                )
+            df = pd.DataFrame(
+                units["USD"]
+            )
 
-                if "fy" not in df.columns:
-                    continue
+            if "fy" not in df.columns:
+                continue
 
-                years = pd.to_numeric(
-                    df["fy"],
-                    errors="coerce"
-                )
+            years = pd.to_numeric(
+                df["fy"],
+                errors="coerce"
+            ).dropna()
 
-                years = years.dropna()
+            if len(years) == 0:
+                continue
 
-                if len(years) == 0:
-                    continue
+            latest_year = years.max()
 
-                latest_year = years.max()
+            if latest_year > best_latest_year:
 
-                if latest_year > best_latest_year:
-
-                    best_latest_year = latest_year
-
-                    best_df = df
-
-                    best_key = key
+                best_latest_year = latest_year
+                best_df = df
+                best_key = key
 
         if best_key is not None:
 
@@ -156,7 +151,6 @@ def clean_annual(df):
         if col not in df.columns:
             return None
 
-    # Annual only
     df = df[
         df["fp"] == "FY"
     ].copy()
@@ -164,7 +158,6 @@ def clean_annual(df):
     if len(df) == 0:
         return None
 
-    # Numeric
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -174,26 +167,21 @@ def clean_annual(df):
         subset=["val"]
     )
 
-    # Filed
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
 
-    # Sort
     df = df.sort_values(
         ["fy", "filed"]
     )
 
-    # Keep newest
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
 
-    # Sort
     df = df.sort_values("fy")
 
-    # Last 5 years
     df = df.tail(5)
 
     return df
@@ -212,7 +200,9 @@ def build_quarters(df):
         "fy",
         "fp",
         "val",
-        "filed"
+        "filed",
+        "start",
+        "end"
     ]
 
     for col in required:
@@ -232,22 +222,41 @@ def build_quarters(df):
     if len(df) == 0:
         return None
 
-    # Numeric
+    # =====================================================
+    # CLEAN TYPES
+    # =====================================================
+
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
     )
 
-    df = df.dropna(
-        subset=["val"]
-    )
+    df = df.dropna(subset=["val"])
 
-    # Filed
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
 
-    # Sort
+    df["start"] = pd.to_datetime(
+        df["start"]
+    )
+
+    df["end"] = pd.to_datetime(
+        df["end"]
+    )
+
+    # =====================================================
+    # DURATION
+    # =====================================================
+
+    df["days"] = (
+        df["end"] - df["start"]
+    ).dt.days
+
+    # =====================================================
+    # SORT
+    # =====================================================
+
     df = df.sort_values(
         ["fy", "filed"]
     )
@@ -270,86 +279,141 @@ def build_quarters(df):
             df["fy"] == year
         ].sort_values("filed")
 
-        q1 = year_df[
-            year_df["fp"] == "Q1"
-        ]["val"]
+        quarter_values = {}
 
-        q2 = year_df[
-            year_df["fp"] == "Q2"
-        ]["val"]
+        # =================================================
+        # PROCESS EACH PERIOD
+        # =================================================
 
-        q3 = year_df[
-            year_df["fp"] == "Q3"
-        ]["val"]
+        for period in ["Q1", "Q2", "Q3", "FY"]:
 
-        fy = year_df[
-            year_df["fp"] == "FY"
-        ]["val"]
+            subset = year_df[
+                year_df["fp"] == period
+            ]
 
-        q1_val = (
-            q1.iloc[-1]
-            if len(q1)
-            else None
-        )
+            if len(subset) == 0:
+                continue
 
-        q2_ytd = (
-            q2.iloc[-1]
-            if len(q2)
-            else None
-        )
+            row = subset.iloc[-1]
 
-        q3_ytd = (
-            q3.iloc[-1]
-            if len(q3)
-            else None
-        )
+            value = row["val"]
 
-        fy_val = (
-            fy.iloc[-1]
-            if len(fy)
-            else None
-        )
+            days = row["days"]
 
-        # REAL QUARTERS
+            quarter_values[period] = {
+                "value": value,
+                "days": days
+            }
 
-        real_q1 = q1_val
+        # =================================================
+        # TRUE QUARTERS
+        # =================================================
 
+        real_q1 = None
         real_q2 = None
         real_q3 = None
         real_q4 = None
 
+        # =============================
+        # Q1
+        # =============================
+
+        if "Q1" in quarter_values:
+
+            real_q1 = (
+                quarter_values["Q1"]["value"]
+            )
+
+        # =============================
         # Q2
-        if (
-            q2_ytd is not None
-            and q1_val is not None
-        ):
+        # =============================
 
-            real_q2 = (
-                q2_ytd - q1_val
+        if "Q2" in quarter_values:
+
+            q2_val = (
+                quarter_values["Q2"]["value"]
             )
 
+            q2_days = (
+                quarter_values["Q2"]["days"]
+            )
+
+            # Standalone quarter
+            if q2_days <= 120:
+
+                real_q2 = q2_val
+
+            # YTD cumulative
+            else:
+
+                if real_q1 is not None:
+
+                    real_q2 = (
+                        q2_val - real_q1
+                    )
+
+        # =============================
         # Q3
-        if (
-            q3_ytd is not None
-            and q2_ytd is not None
-        ):
+        # =============================
 
-            real_q3 = (
-                q3_ytd - q2_ytd
+        if "Q3" in quarter_values:
+
+            q3_val = (
+                quarter_values["Q3"]["value"]
             )
 
+            q3_days = (
+                quarter_values["Q3"]["days"]
+            )
+
+            # Standalone
+            if q3_days <= 120:
+
+                real_q3 = q3_val
+
+            # Cumulative
+            else:
+
+                q2_total = (
+                    quarter_values["Q2"]["value"]
+                    if "Q2" in quarter_values
+                    else None
+                )
+
+                if q2_total is not None:
+
+                    real_q3 = (
+                        q3_val - q2_total
+                    )
+
+        # =============================
         # Q4
+        # =============================
+
         if (
-            fy_val is not None
-            and q3_ytd is not None
+            "FY" in quarter_values
+            and year < current_date.year
         ):
 
-            # Avoid fake future Q4
-            if year < current_date.year:
+            fy_val = (
+                quarter_values["FY"]["value"]
+            )
+
+            q3_total = (
+                quarter_values["Q3"]["value"]
+                if "Q3" in quarter_values
+                else None
+            )
+
+            if q3_total is not None:
 
                 real_q4 = (
-                    fy_val - q3_ytd
+                    fy_val - q3_total
                 )
+
+        # =================================================
+        # STORE
+        # =================================================
 
         quarters = {
             "Q1": real_q1,
@@ -366,7 +430,6 @@ def build_quarters(df):
             ):
                 continue
 
-            # Quarter dates
             quarter_month = {
                 "Q1": 3,
                 "Q2": 6,
@@ -398,13 +461,15 @@ def build_quarters(df):
         "Quarter"
     )
 
-    # QoQ
+    # =====================================================
+    # GROWTH
+    # =====================================================
+
     result["QoQ Growth %"] = (
         result["Revenue"]
         .pct_change() * 100
     )
 
-    # YoY
     result["YoY Growth %"] = (
         result["Revenue"]
         .pct_change(4) * 100
@@ -414,7 +479,7 @@ def build_quarters(df):
 
 
 # =========================================================
-# LATEST VALUE
+# HELPERS
 # =========================================================
 
 def latest(df):
@@ -427,10 +492,6 @@ def latest(df):
 
     return df.iloc[-1]["val"]
 
-
-# =========================================================
-# ADD GROWTH
-# =========================================================
 
 def add_growth(df):
 
@@ -462,10 +523,6 @@ ticker = st.text_input(
 
 if st.button("Analyze"):
 
-    # =====================================================
-    # GET CIK
-    # =====================================================
-
     cik = get_cik_from_ticker(
         ticker
     )
@@ -489,7 +546,7 @@ if st.button("Analyze"):
     data = get_company_facts(cik)
 
     # =====================================================
-    # RAW METRICS
+    # METRICS
     # =====================================================
 
     revenue_raw = get_metric(
@@ -544,7 +601,7 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # CLEAN DATA
+    # CLEAN
     # =====================================================
 
     revenue = clean_annual(
@@ -624,7 +681,7 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # FREE CASH FLOW
+    # FCF
     # =====================================================
 
     free_cash_flow = None
