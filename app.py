@@ -1,12 +1,12 @@
 # =========================================================
-# TEA Institutional Fundamental Scanner
-# Full SEC EDGAR Financial Analyzer
+# TEA HTML Filing Parser
+# Read REAL SEC Financial Statements
 # =========================================================
 
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.express as px
+from bs4 import BeautifulSoup
 
 # =========================================================
 # CONFIG
@@ -17,7 +17,7 @@ HEADERS = {
 }
 
 st.set_page_config(
-    page_title="TEA Institutional Scanner",
+    page_title="TEA HTML Filing Parser",
     layout="wide"
 )
 
@@ -47,11 +47,11 @@ def get_cik_from_ticker(ticker):
 
 
 @st.cache_data
-def get_company_facts(cik):
+def get_company_submissions(cik):
 
     url = (
-        f"https://data.sec.gov/api/xbrl/"
-        f"companyfacts/CIK{cik}.json"
+        f"https://data.sec.gov/submissions/"
+        f"CIK{cik}.json"
     )
 
     response = requests.get(
@@ -62,213 +62,92 @@ def get_company_facts(cik):
     return response.json()
 
 
-def get_financial_metric(data, possible_keys):
+def extract_filings(submissions):
 
-    us_gaap = data["facts"]["us-gaap"]
+    recent = submissions["filings"]["recent"]
 
-    for key in possible_keys:
+    df = pd.DataFrame({
+        "form": recent["form"],
+        "filingDate": recent["filingDate"],
+        "accessionNumber": recent["accessionNumber"],
+        "primaryDocument": recent["primaryDocument"]
+    })
 
-        if key in us_gaap:
-
-            try:
-
-                metric = us_gaap[key]["units"]["USD"]
-
-                df = pd.DataFrame(metric)
-
-                return df
-
-            except:
-                pass
-
-    return None
-
-
-# =========================================================
-# CLEAN ANNUAL DATA
-# =========================================================
-
-def clean_annual_data(df):
-
-    if df is None:
-        return None
-
-    required = ["fy", "fp", "val"]
-
-    for col in required:
-
-        if col not in df.columns:
-            return None
-
-    df = df[df["fp"] == "FY"].copy()
-
-    if "frame" in df.columns:
-        df = df[df["frame"].isna()]
-
-    df["val"] = pd.to_numeric(
-        df["val"],
-        errors="coerce"
-    )
-
-    df = df.dropna(subset=["val"])
-
-    df = df.sort_values("fy")
-
-    df = df.drop_duplicates(
-        subset=["fy"],
-        keep="last"
-    )
-
-    return df
-
-
-# =========================================================
-# BUILD TRUE QUARTERLY DATA
-# =========================================================
-
-def build_quarterly_data(df):
-
-    if df is None:
-        return None
-
-    required = ["fy", "fp", "val"]
-
-    for col in required:
-
-        if col not in df.columns:
-            return None
-
-    df = df[
-        df["fp"].isin(["Q1", "Q2", "Q3", "FY"])
+    filings = df[
+        df["form"].isin(["10-K", "10-Q"])
     ].copy()
 
-    df["val"] = pd.to_numeric(
-        df["val"],
-        errors="coerce"
+    return filings
+
+
+def build_filing_url(
+    cik,
+    accession,
+    document
+):
+
+    accession_clean = accession.replace("-", "")
+
+    url = (
+        f"https://www.sec.gov/Archives/"
+        f"edgar/data/{int(cik)}/"
+        f"{accession_clean}/{document}"
     )
 
-    df = df.dropna(subset=["val"])
+    return url
 
-    if "frame" in df.columns:
-        df = df[df["frame"].isna()]
 
-    df = df.sort_values(
-        ["fy", "fp"]
+@st.cache_data
+def download_filing_html(url):
+
+    response = requests.get(
+        url,
+        headers=HEADERS
     )
 
-    quarterly_rows = []
-
-    years = sorted(df["fy"].unique())
-
-    for year in years:
-
-        year_df = df[df["fy"] == year]
-
-        q1 = year_df[
-            year_df["fp"] == "Q1"
-        ]["val"]
-
-        q2 = year_df[
-            year_df["fp"] == "Q2"
-        ]["val"]
-
-        q3 = year_df[
-            year_df["fp"] == "Q3"
-        ]["val"]
-
-        fy = year_df[
-            year_df["fp"] == "FY"
-        ]["val"]
-
-        q1_val = q1.iloc[-1] if len(q1) else None
-        q2_ytd = q2.iloc[-1] if len(q2) else None
-        q3_ytd = q3.iloc[-1] if len(q3) else None
-        fy_val = fy.iloc[-1] if len(fy) else None
-
-        # REAL QUARTERS
-
-        real_q1 = q1_val
-
-        real_q2 = None
-        real_q3 = None
-        real_q4 = None
-
-        if (
-            q2_ytd is not None
-            and q1_val is not None
-        ):
-            real_q2 = q2_ytd - q1_val
-
-        if (
-            q3_ytd is not None
-            and q2_ytd is not None
-        ):
-            real_q3 = q3_ytd - q2_ytd
-
-        if (
-            fy_val is not None
-            and q3_ytd is not None
-        ):
-            real_q4 = fy_val - q3_ytd
-
-        quarters = {
-            "Q1": real_q1,
-            "Q2": real_q2,
-            "Q3": real_q3,
-            "Q4": real_q4
-        }
-
-        for quarter, value in quarters.items():
-
-            if value is not None:
-
-                quarterly_rows.append({
-                    "Quarter": f"{year}-{quarter}",
-                    "Revenue": value
-                })
-
-    result = pd.DataFrame(
-        quarterly_rows
-    )
-
-    result["QoQ Growth %"] = (
-        result["Revenue"].pct_change() * 100
-    )
-
-    result["YoY Growth %"] = (
-        result["Revenue"].pct_change(4) * 100
-    )
-
-    return result
+    return response.text
 
 
-# =========================================================
-# CALCULATIONS
-# =========================================================
+def extract_tables_from_html(html):
 
-def latest_value(df):
+    try:
 
-    if df is None:
-        return None
+        tables = pd.read_html(html)
 
-    if len(df) == 0:
-        return None
+        return tables
 
-    return df.iloc[-1]["val"]
+    except:
+
+        return []
 
 
-def calculate_growth(df):
+def find_income_statement_tables(tables):
 
-    if df is None:
-        return None
+    keywords = [
+        "revenue",
+        "net income",
+        "operating income",
+        "gross profit"
+    ]
 
-    df = df.copy()
+    matching_tables = []
 
-    df["Growth %"] = (
-        df["val"].pct_change() * 100
-    )
+    for i, table in enumerate(tables):
 
-    return df
+        table_str = str(table).lower()
+
+        matches = sum(
+            keyword in table_str
+            for keyword in keywords
+        )
+
+        if matches >= 2:
+
+            matching_tables.append(
+                (i, table)
+            )
+
+    return matching_tables
 
 
 # =========================================================
@@ -276,7 +155,7 @@ def calculate_growth(df):
 # =========================================================
 
 st.title(
-    "TEA Institutional Fundamental Scanner"
+    "TEA HTML SEC Filing Parser"
 )
 
 ticker = st.text_input(
@@ -284,10 +163,10 @@ ticker = st.text_input(
     value="NVDA"
 )
 
-if st.button("Analyze Company"):
+if st.button("Load Filings"):
 
     # =====================================================
-    # LOAD DATA
+    # GET CIK
     # =====================================================
 
     cik = get_cik_from_ticker(ticker)
@@ -300,387 +179,130 @@ if st.button("Analyze Company"):
 
     st.success(f"CIK Found: {cik}")
 
-    data = get_company_facts(cik)
-
     # =====================================================
-    # EXTRACT METRICS
+    # GET FILINGS
     # =====================================================
 
-    revenue_raw = get_financial_metric(
-        data,
-        [
-            "RevenueFromContractWithCustomerExcludingAssessedTax",
-            "SalesRevenueNet",
-            "Revenues"
-        ]
-    )
+    submissions = get_company_submissions(cik)
 
-    operating_income_raw = get_financial_metric(
-        data,
-        [
-            "OperatingIncomeLoss"
-        ]
-    )
+    filings = extract_filings(submissions)
 
-    net_income_raw = get_financial_metric(
-        data,
-        [
-            "NetIncomeLoss"
-        ]
-    )
-
-    gross_profit_raw = get_financial_metric(
-        data,
-        [
-            "GrossProfit"
-        ]
-    )
-
-    operating_cash_flow_raw = get_financial_metric(
-        data,
-        [
-            "NetCashProvidedByUsedInOperatingActivities"
-        ]
-    )
-
-    capex_raw = get_financial_metric(
-        data,
-        [
-            "PaymentsToAcquirePropertyPlantAndEquipment"
-        ]
-    )
-
-    cash_raw = get_financial_metric(
-        data,
-        [
-            "CashAndCashEquivalentsAtCarryingValue"
-        ]
-    )
-
-    assets_raw = get_financial_metric(
-        data,
-        [
-            "Assets"
-        ]
-    )
-
-    liabilities_raw = get_financial_metric(
-        data,
-        [
-            "Liabilities"
-        ]
-    )
+    filings = filings.head(10)
 
     # =====================================================
-    # CLEAN DATA
+    # BUILD URLS
     # =====================================================
 
-    revenue = clean_annual_data(
-        revenue_raw
-    )
+    filing_urls = []
 
-    operating_income = clean_annual_data(
-        operating_income_raw
-    )
+    for _, row in filings.iterrows():
 
-    net_income = clean_annual_data(
-        net_income_raw
-    )
-
-    gross_profit = clean_annual_data(
-        gross_profit_raw
-    )
-
-    operating_cash_flow = clean_annual_data(
-        operating_cash_flow_raw
-    )
-
-    capex = clean_annual_data(
-        capex_raw
-    )
-
-    cash = clean_annual_data(
-        cash_raw
-    )
-
-    assets = clean_annual_data(
-        assets_raw
-    )
-
-    liabilities = clean_annual_data(
-        liabilities_raw
-    )
-
-    # =====================================================
-    # QUARTERLY
-    # =====================================================
-
-    quarterly_revenue = build_quarterly_data(
-        revenue_raw
-    )
-
-    # =====================================================
-    # ANNUAL GROWTH
-    # =====================================================
-
-    revenue = calculate_growth(
-        revenue
-    )
-
-    # =====================================================
-    # LATEST VALUES
-    # =====================================================
-
-    latest_revenue = latest_value(
-        revenue
-    )
-
-    latest_operating_income = latest_value(
-        operating_income
-    )
-
-    latest_net_income = latest_value(
-        net_income
-    )
-
-    latest_gross_profit = latest_value(
-        gross_profit
-    )
-
-    latest_ocf = latest_value(
-        operating_cash_flow
-    )
-
-    latest_capex = latest_value(
-        capex
-    )
-
-    latest_cash = latest_value(
-        cash
-    )
-
-    latest_assets = latest_value(
-        assets
-    )
-
-    latest_liabilities = latest_value(
-        liabilities
-    )
-
-    # =====================================================
-    # FREE CASH FLOW
-    # =====================================================
-
-    free_cash_flow = None
-
-    if (
-        latest_ocf is not None
-        and latest_capex is not None
-    ):
-
-        free_cash_flow = (
-            latest_ocf - abs(latest_capex)
+        filing_url = build_filing_url(
+            cik,
+            row["accessionNumber"],
+            row["primaryDocument"]
         )
 
-    # =====================================================
-    # MARGINS
-    # =====================================================
+        filing_urls.append(filing_url)
 
-    operating_margin = None
-    net_margin = None
-    gross_margin = None
-    fcf_margin = None
-
-    if (
-        latest_revenue is not None
-        and latest_operating_income is not None
-    ):
-
-        operating_margin = (
-            latest_operating_income
-            / latest_revenue
-        ) * 100
-
-    if (
-        latest_revenue is not None
-        and latest_net_income is not None
-    ):
-
-        net_margin = (
-            latest_net_income
-            / latest_revenue
-        ) * 100
-
-    if (
-        latest_revenue is not None
-        and latest_gross_profit is not None
-    ):
-
-        gross_margin = (
-            latest_gross_profit
-            / latest_revenue
-        ) * 100
-
-    if (
-        latest_revenue is not None
-        and free_cash_flow is not None
-    ):
-
-        fcf_margin = (
-            free_cash_flow
-            / latest_revenue
-        ) * 100
+    filings["SEC URL"] = filing_urls
 
     # =====================================================
-    # REVENUE GROWTH
+    # DISPLAY FILINGS
     # =====================================================
 
-    latest_growth = None
+    st.subheader("Recent 10-K / 10-Q Filings")
 
-    if revenue is not None:
-
-        latest_growth = revenue.iloc[-1][
-            "Growth %"
-        ]
-
-    # =====================================================
-    # RULE OF 40
-    # =====================================================
-
-    rule_of_40 = None
-
-    if (
-        latest_growth is not None
-        and operating_margin is not None
-    ):
-
-        rule_of_40 = (
-            latest_growth
-            + operating_margin
-        )
+    st.dataframe(
+        filings,
+        use_container_width=True
+    )
 
     # =====================================================
-    # DISPLAY
+    # SELECT FILING
     # =====================================================
 
-    st.subheader("Key Metrics")
+    filing_options = {}
 
-    col1, col2, col3, col4 = st.columns(4)
+    for idx, row in filings.iterrows():
 
-    with col1:
-
-        st.metric(
-            "Revenue",
-            f"${latest_revenue:,.0f}"
-            if latest_revenue
-            else "N/A"
+        label = (
+            f"{row['form']} | "
+            f"{row['filingDate']}"
         )
 
-        st.metric(
-            "Revenue Growth %",
-            f"{latest_growth:.2f}%"
-            if latest_growth is not None
-            else "N/A"
-        )
+        filing_options[label] = row["SEC URL"]
 
-    with col2:
+    selected_filing = st.selectbox(
+        "Select Filing",
+        list(filing_options.keys())
+    )
 
-        st.metric(
-            "Operating Margin",
-            f"{operating_margin:.2f}%"
-            if operating_margin is not None
-            else "N/A"
-        )
+    filing_url = filing_options[
+        selected_filing
+    ]
 
-        st.metric(
-            "Gross Margin",
-            f"{gross_margin:.2f}%"
-            if gross_margin is not None
-            else "N/A"
-        )
-
-    with col3:
-
-        st.metric(
-            "Net Margin",
-            f"{net_margin:.2f}%"
-            if net_margin is not None
-            else "N/A"
-        )
-
-        st.metric(
-            "FCF Margin",
-            f"{fcf_margin:.2f}%"
-            if fcf_margin is not None
-            else "N/A"
-        )
-
-    with col4:
-
-        st.metric(
-            "Rule of 40",
-            f"{rule_of_40:.2f}"
-            if rule_of_40 is not None
-            else "N/A"
-        )
-
-        st.metric(
-            "Cash",
-            f"${latest_cash:,.0f}"
-            if latest_cash
-            else "N/A"
-        )
+    st.write(filing_url)
 
     # =====================================================
-    # ANNUAL TABLE
+    # DOWNLOAD HTML
+    # =====================================================
+
+    with st.spinner("Downloading filing..."):
+
+        html = download_filing_html(
+            filing_url
+        )
+
+    st.success("Filing downloaded")
+
+    # =====================================================
+    # EXTRACT TABLES
+    # =====================================================
+
+    with st.spinner("Extracting tables..."):
+
+        tables = extract_tables_from_html(
+            html
+        )
+
+    st.success(
+        f"{len(tables)} tables extracted"
+    )
+
+    # =====================================================
+    # FIND FINANCIAL TABLES
+    # =====================================================
+
+    financial_tables = (
+        find_income_statement_tables(
+            tables
+        )
+    )
+
+    # =====================================================
+    # DISPLAY TABLES
     # =====================================================
 
     st.subheader(
-        "Annual Revenue"
+        "Financial Statement Tables"
     )
 
-    st.dataframe(
-        revenue,
-        use_container_width=True
-    )
+    if len(financial_tables) == 0:
 
-    # =====================================================
-    # QUARTERLY TABLE
-    # =====================================================
+        st.warning(
+            "No financial tables detected"
+        )
 
-    st.subheader(
-        "Quarterly Revenue"
-    )
+    else:
 
-    st.dataframe(
-        quarterly_revenue,
-        use_container_width=True
-    )
+        for idx, table in financial_tables:
 
-    # =====================================================
-    # CHARTS
-    # =====================================================
+            st.markdown(
+                f"### Table {idx}"
+            )
 
-    fig_annual = px.line(
-        revenue,
-        x="fy",
-        y="val",
-        title=f"{ticker} Annual Revenue"
-    )
-
-    st.plotly_chart(
-        fig_annual,
-        use_container_width=True
-    )
-
-    fig_quarterly = px.line(
-        quarterly_revenue,
-        x="Quarter",
-        y="Revenue",
-        title=f"{ticker} Quarterly Revenue"
-    )
-
-    st.plotly_chart(
-        fig_quarterly,
-        use_container_width=True
-    )
+            st.dataframe(
+                table,
+                use_container_width=True
+            )
