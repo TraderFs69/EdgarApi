@@ -1,11 +1,12 @@
 # =========================================================
-# TEA Institutional SEC Scanner
-# FULL VERSION WITH BEAUTIFUL TABLES
+# export_all_xbrl.py
+# TEA Institutional Full XBRL Exporter
+# Export ALL available SEC financial data
 # =========================================================
 
-import streamlit as st
 import pandas as pd
 import requests
+import os
 
 # =========================================================
 # CONFIG
@@ -15,86 +16,27 @@ HEADERS = {
     "User-Agent": "TradingEnAction fsanscartier@hotmail.com"
 }
 
-st.set_page_config(
-    page_title="TEA Institutional Scanner",
-    layout="wide"
+OUTPUT_FOLDER = "exports"
+
+os.makedirs(
+    OUTPUT_FOLDER,
+    exist_ok=True
 )
-
-# =========================================================
-# STYLE
-# =========================================================
-
-st.markdown("""
-<style>
-
-.stApp {
-    background-color: #0e1117;
-    color: white;
-}
-
-h1, h2, h3 {
-    color: #ff8c00;
-}
-
-div[data-testid="metric-container"] {
-    background-color: #161b22;
-    border: 1px solid #30363d;
-    padding: 15px;
-    border-radius: 12px;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-# =========================================================
-# FORMATTERS
-# =========================================================
-
-def format_number(value):
-
-    if value is None or pd.isna(value):
-        return "N/A"
-
-    value = float(value)
-
-    abs_value = abs(value)
-
-    if abs_value >= 1_000_000_000_000:
-        return f"{value / 1_000_000_000_000:.2f}T"
-
-    elif abs_value >= 1_000_000_000:
-        return f"{value / 1_000_000_000:.2f}B"
-
-    elif abs_value >= 1_000_000:
-        return f"{value / 1_000_000:.2f}M"
-
-    elif abs_value >= 1_000:
-        return f"{value / 1_000:.2f}K"
-
-    return f"{value:,.0f}"
-
-
-def format_percent(value):
-
-    if value is None or pd.isna(value):
-        return "N/A"
-
-    return f"{value:.2f}%"
-
 
 # =========================================================
 # GET CIK
 # =========================================================
 
-@st.cache_data
 def get_cik_from_ticker(ticker):
 
     url = "https://www.sec.gov/files/company_tickers.json"
 
-    data = requests.get(
+    response = requests.get(
         url,
         headers=HEADERS
-    ).json()
+    )
+
+    data = response.json()
 
     for company in data.values():
 
@@ -111,7 +53,6 @@ def get_cik_from_ticker(ticker):
 # GET COMPANY FACTS
 # =========================================================
 
-@st.cache_data
 def get_company_facts(cik):
 
     url = (
@@ -128,324 +69,16 @@ def get_company_facts(cik):
 
 
 # =========================================================
-# GET BEST METRIC
+# EXPORT ALL US-GAAP TAGS
 # =========================================================
 
-def get_metric(data, keys):
+def export_all_xbrl(ticker):
 
-    try:
+    print(f"\nExporting ALL XBRL data for {ticker}...\n")
 
-        us_gaap = data["facts"]["us-gaap"]
-
-        best_df = None
-        best_latest_year = 0
-
-        for key in keys:
-
-            if key not in us_gaap:
-                continue
-
-            units = us_gaap[key]["units"]
-
-            if "USD" not in units:
-                continue
-
-            df = pd.DataFrame(
-                units["USD"]
-            )
-
-            if "fy" not in df.columns:
-                continue
-
-            years = pd.to_numeric(
-                df["fy"],
-                errors="coerce"
-            ).dropna()
-
-            if len(years) == 0:
-                continue
-
-            latest_year = years.max()
-
-            if latest_year > best_latest_year:
-
-                best_latest_year = latest_year
-                best_df = df
-
-        return best_df
-
-    except:
-        return None
-
-
-# =========================================================
-# CLEAN ANNUAL
-# =========================================================
-
-def clean_annual(df):
-
-    if df is None:
-        return None
-
-    required = [
-        "fy",
-        "fp",
-        "val",
-        "filed"
-    ]
-
-    for col in required:
-
-        if col not in df.columns:
-            return None
-
-    df = df[
-        df["fp"] == "FY"
-    ].copy()
-
-    if len(df) == 0:
-        return None
-
-    df["val"] = pd.to_numeric(
-        df["val"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=["val"]
-    )
-
-    df["filed"] = pd.to_datetime(
-        df["filed"]
-    )
-
-    df = df.sort_values(
-        ["fy", "filed"]
-    )
-
-    df = df.drop_duplicates(
-        subset=["fy"],
-        keep="last"
-    )
-
-    df = df.sort_values("fy")
-
-    df = df.tail(5)
-
-    return df
-
-
-# =========================================================
-# BUILD QUARTERS
-# =========================================================
-
-def build_quarters(df):
-
-    if df is None:
-        return None
-
-    required = [
-        "fy",
-        "fp",
-        "val",
-        "filed",
-        "form",
-        "end"
-    ]
-
-    for col in required:
-
-        if col not in df.columns:
-            return None
-
-    df = df[
-        df["fp"].isin([
-            "Q1",
-            "Q2",
-            "Q3",
-            "FY"
-        ])
-    ].copy()
-
-    df["val"] = pd.to_numeric(
-        df["val"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=["val"]
-    )
-
-    df = df[
-        df["form"].isin([
-            "10-Q",
-            "10-K"
-        ])
-    ]
-
-    df["filed"] = pd.to_datetime(
-        df["filed"]
-    )
-
-    df["end"] = pd.to_datetime(
-        df["end"]
-    )
-
-    today = pd.Timestamp.now()
-
-    df = df[
-        df["end"] <= today
-    ]
-
-    rows = []
-
-    years = sorted(
-        df["fy"]
-        .dropna()
-        .unique()
-    )[-2:]
-
-    current_year = today.year
-
-    for year in years:
-
-        year_df = df[
-            df["fy"] == year
-        ]
-
-        q1 = year_df[
-            (year_df["fp"] == "Q1")
-            &
-            (year_df["form"] == "10-Q")
-        ]["val"]
-
-        q2 = year_df[
-            (year_df["fp"] == "Q2")
-            &
-            (year_df["form"] == "10-Q")
-        ]["val"]
-
-        q3 = year_df[
-            (year_df["fp"] == "Q3")
-            &
-            (year_df["form"] == "10-Q")
-        ]["val"]
-
-        fy = year_df[
-            (year_df["fp"] == "FY")
-            &
-            (year_df["form"] == "10-K")
-        ]["val"]
-
-        q1_val = q1.max() if len(q1) else None
-        q2_ytd = q2.max() if len(q2) else None
-        q3_ytd = q3.max() if len(q3) else None
-        fy_val = fy.max() if len(fy) else None
-
-        real_q1 = q1_val
-
-        real_q2 = (
-            q2_ytd - q1_val
-            if q2_ytd is not None
-            and q1_val is not None
-            else None
-        )
-
-        real_q3 = (
-            q3_ytd - q2_ytd
-            if q3_ytd is not None
-            and q2_ytd is not None
-            else None
-        )
-
-        real_q4 = (
-            fy_val - q3_ytd
-            if fy_val is not None
-            and q3_ytd is not None
-            and year < current_year
-            else None
-        )
-
-        quarters = {
-            "Q1": real_q1,
-            "Q2": real_q2,
-            "Q3": real_q3,
-            "Q4": real_q4
-        }
-
-        for q, value in quarters.items():
-
-            if value is None:
-                continue
-
-            rows.append({
-                "Quarter": f"{year}-{q}",
-                "Revenue": value
-            })
-
-    result = pd.DataFrame(rows)
-
-    if len(result) == 0:
-        return None
-
-    result = result.sort_values(
-        "Quarter"
-    )
-
-    result["QoQ Growth %"] = (
-        result["Revenue"]
-        .pct_change() * 100
-    )
-
-    result["YoY Growth %"] = (
-        result["Revenue"]
-        .pct_change(4) * 100
-    )
-
-    return result
-
-
-# =========================================================
-# HELPERS
-# =========================================================
-
-def add_growth(df):
-
-    if df is None:
-        return None
-
-    df = df.copy()
-
-    df["Growth %"] = (
-        df["val"]
-        .pct_change() * 100
-    )
-
-    return df
-
-
-def latest(df):
-
-    if df is None or len(df) == 0:
-        return None
-
-    return df.iloc[-1]["val"]
-
-
-# =========================================================
-# UI
-# =========================================================
-
-st.title(
-    "TEA Institutional SEC Scanner"
-)
-
-ticker = st.text_input(
-    "Ticker",
-    value="NVDA"
-)
-
-if st.button("Analyze"):
+    # =====================================================
+    # GET CIK
+    # =====================================================
 
     cik = get_cik_from_ticker(
         ticker
@@ -453,457 +86,259 @@ if st.button("Analyze"):
 
     if cik is None:
 
-        st.error("Ticker not found")
-        st.stop()
+        print("Ticker not found.")
+        return
+
+    print(f"CIK: {cik}")
+
+    # =====================================================
+    # LOAD DATA
+    # =====================================================
 
     data = get_company_facts(cik)
 
-    # =====================================================
-    # METRICS
-    # =====================================================
+    if "facts" not in data:
 
-    revenue_raw = get_metric(
-        data,
-        [
-            "RevenueFromContractWithCustomerExcludingAssessedTax",
-            "SalesRevenueNet",
-            "Revenues"
-        ]
-    )
+        print("No facts found.")
+        return
 
-    gross_profit_raw = get_metric(
-        data,
-        ["GrossProfit"]
-    )
+    if "us-gaap" not in data["facts"]:
 
-    operating_income_raw = get_metric(
-        data,
-        ["OperatingIncomeLoss"]
-    )
+        print("No us-gaap section.")
+        return
 
-    net_income_raw = get_metric(
-        data,
-        ["NetIncomeLoss"]
-    )
-
-    operating_cf_raw = get_metric(
-        data,
-        ["NetCashProvidedByUsedInOperatingActivities"]
-    )
-
-    capex_raw = get_metric(
-        data,
-        ["PaymentsToAcquirePropertyPlantAndEquipment"]
-    )
-
-    cash_raw = get_metric(
-        data,
-        ["CashAndCashEquivalentsAtCarryingValue"]
-    )
-
-    debt_raw = get_metric(
-        data,
-        [
-            "LongTermDebt",
-            "LongTermDebtNoncurrent"
-        ]
-    )
-
-    equity_raw = get_metric(
-        data,
-        [
-            "StockholdersEquity",
-            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
-        ]
-    )
-
-    rd_raw = get_metric(
-        data,
-        ["ResearchAndDevelopmentExpense"]
-    )
-
-    sga_raw = get_metric(
-        data,
-        ["SellingGeneralAndAdministrativeExpense"]
-    )
-
-    assets_raw = get_metric(
-        data,
-        ["Assets"]
-    )
-
-    liabilities_raw = get_metric(
-        data,
-        ["Liabilities"]
-    )
+    us_gaap = data["facts"]["us-gaap"]
 
     # =====================================================
-    # CLEAN
+    # STORAGE
     # =====================================================
 
-    revenue = add_growth(
-        clean_annual(revenue_raw)
-    )
-
-    gross_profit = clean_annual(
-        gross_profit_raw
-    )
-
-    operating_income = clean_annual(
-        operating_income_raw
-    )
-
-    net_income = clean_annual(
-        net_income_raw
-    )
-
-    operating_cf = clean_annual(
-        operating_cf_raw
-    )
-
-    capex = clean_annual(
-        capex_raw
-    )
-
-    cash = clean_annual(
-        cash_raw
-    )
-
-    debt = clean_annual(
-        debt_raw
-    )
-
-    equity = clean_annual(
-        equity_raw
-    )
-
-    rd = clean_annual(
-        rd_raw
-    )
-
-    sga = clean_annual(
-        sga_raw
-    )
-
-    assets = clean_annual(
-        assets_raw
-    )
-
-    liabilities = clean_annual(
-        liabilities_raw
-    )
-
-    quarterly_revenue = build_quarters(
-        revenue_raw
-    )
+    rows = []
 
     # =====================================================
-    # VALUES
+    # LOOP THROUGH ALL METRICS
     # =====================================================
 
-    latest_revenue = latest(revenue)
-    latest_growth = revenue.iloc[-1]["Growth %"]
+    for metric_name, metric_data in us_gaap.items():
 
-    latest_gross_profit = latest(gross_profit)
-    latest_operating_income = latest(operating_income)
-    latest_net_income = latest(net_income)
+        try:
 
-    latest_ocf = latest(operating_cf)
-    latest_capex = latest(capex)
+            if "units" not in metric_data:
+                continue
 
-    latest_cash = latest(cash)
-    latest_debt = latest(debt)
-    latest_equity = latest(equity)
+            # =================================================
+            # LOOP THROUGH UNITS
+            # =================================================
 
-    latest_rd = latest(rd)
-    latest_sga = latest(sga)
+            for unit_name, values in metric_data[
+                "units"
+            ].items():
 
-    latest_assets = latest(assets)
-    latest_liabilities = latest(liabilities)
+                # =================================================
+                # LOOP THROUGH ENTRIES
+                # =================================================
 
-    # =====================================================
-    # CALCULATIONS
-    # =====================================================
+                for item in values:
 
-    free_cash_flow = (
-        latest_ocf - abs(latest_capex)
-        if latest_ocf is not None
-        and latest_capex is not None
-        else None
-    )
+                    row = {
+                        "Ticker": ticker,
+                        "Metric": metric_name,
+                        "Unit": unit_name,
+                        "Value": item.get("val"),
+                        "FY": item.get("fy"),
+                        "FP": item.get("fp"),
+                        "Form": item.get("form"),
+                        "Filed": item.get("filed"),
+                        "Frame": item.get("frame"),
+                        "Start": item.get("start"),
+                        "End": item.get("end"),
+                        "Fiscal Year": item.get("fy"),
+                        "Fiscal Period": item.get("fp"),
+                        "Accession": item.get("accn")
+                    }
 
-    gross_margin = (
-        latest_gross_profit / latest_revenue * 100
-        if latest_revenue
-        and latest_gross_profit
-        else None
-    )
+                    rows.append(row)
 
-    operating_margin = (
-        latest_operating_income / latest_revenue * 100
-        if latest_revenue
-        and latest_operating_income
-        else None
-    )
+        except Exception as e:
 
-    net_margin = (
-        latest_net_income / latest_revenue * 100
-        if latest_revenue
-        and latest_net_income
-        else None
-    )
-
-    fcf_margin = (
-        free_cash_flow / latest_revenue * 100
-        if free_cash_flow
-        and latest_revenue
-        else None
-    )
-
-    roe = (
-        latest_net_income / latest_equity * 100
-        if latest_net_income
-        and latest_equity
-        else None
-    )
-
-    debt_to_equity = (
-        latest_debt / latest_equity
-        if latest_debt
-        and latest_equity
-        else None
-    )
-
-    rule_of_40 = (
-        latest_growth + operating_margin
-        if latest_growth
-        and operating_margin
-        else None
-    )
-
-    # =====================================================
-    # OVERVIEW
-    # =====================================================
-
-    st.markdown(
-        "## Institutional Overview"
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-
-        st.metric(
-            "Revenue",
-            format_number(
-                latest_revenue
+            print(
+                f"Error on metric {metric_name}: {e}"
             )
-        )
-
-        st.metric(
-            "Revenue Growth",
-            format_percent(
-                latest_growth
-            )
-        )
-
-    with col2:
-
-        st.metric(
-            "Gross Margin",
-            format_percent(
-                gross_margin
-            )
-        )
-
-        st.metric(
-            "Operating Margin",
-            format_percent(
-                operating_margin
-            )
-        )
-
-    with col3:
-
-        st.metric(
-            "Net Margin",
-            format_percent(
-                net_margin
-            )
-        )
-
-        st.metric(
-            "FCF Margin",
-            format_percent(
-                fcf_margin
-            )
-        )
-
-    with col4:
-
-        st.metric(
-            "ROE",
-            format_percent(
-                roe
-            )
-        )
-
-        st.metric(
-            "Rule of 40",
-            format_percent(
-                rule_of_40
-            )
-        )
 
     # =====================================================
-    # 5 YEAR TABLE
+    # CREATE DATAFRAME
     # =====================================================
 
-    st.divider()
+    df = pd.DataFrame(rows)
 
-    st.markdown(
-        "## 5-Year Financial Growth"
-    )
+    if len(df) == 0:
 
-    growth_table = pd.DataFrame()
-
-    growth_table["Year"] = revenue["fy"]
-
-    growth_table["Revenue"] = revenue[
-        "val"
-    ].apply(
-        format_number
-    )
-
-    growth_table["Revenue Growth"] = revenue[
-        "Growth %"
-    ].apply(
-        lambda x:
-        f"{x:.2f}%"
-        if pd.notnull(x)
-        else "-"
-    )
-
-    growth_table["Gross Profit"] = gross_profit[
-        "val"
-    ].apply(
-        format_number
-    )
-
-    growth_table["Operating Income"] = operating_income[
-        "val"
-    ].apply(
-        format_number
-    )
-
-    growth_table["Net Income"] = net_income[
-        "val"
-    ].apply(
-        format_number
-    )
-
-    growth_table["Operating CF"] = operating_cf[
-        "val"
-    ].apply(
-        format_number
-    )
-
-    st.dataframe(
-        growth_table,
-        use_container_width=True,
-        hide_index=True
-    )
+        print("No data exported.")
+        return
 
     # =====================================================
-    # QUARTERLY TABLE
+    # CLEAN DATES
     # =====================================================
 
-    st.divider()
-
-    st.markdown(
-        "## Quarterly Revenue Growth"
-    )
-
-    if quarterly_revenue is not None:
-
-        quarterly_display = (
-            quarterly_revenue.copy()
-        )
-
-        quarterly_display["Revenue"] = (
-            quarterly_display["Revenue"]
-            .apply(format_number)
-        )
-
-        quarterly_display["QoQ Growth %"] = (
-            quarterly_display["QoQ Growth %"]
-            .apply(
-                lambda x:
-                f"{x:.2f}%"
-                if pd.notnull(x)
-                else "-"
-            )
-        )
-
-        quarterly_display["YoY Growth %"] = (
-            quarterly_display["YoY Growth %"]
-            .apply(
-                lambda x:
-                f"{x:.2f}%"
-                if pd.notnull(x)
-                else "-"
-            )
-        )
-
-        quarterly_display.columns = [
-            "Quarter",
-            "Revenue",
-            "QoQ Growth",
-            "YoY Growth"
-        ]
-
-        st.dataframe(
-            quarterly_display,
-            use_container_width=True,
-            hide_index=True
-        )
-
-    # =====================================================
-    # BALANCE SHEET
-    # =====================================================
-
-    st.divider()
-
-    st.markdown(
-        "## Balance Sheet Snapshot"
-    )
-
-    balance_table = pd.DataFrame()
-
-    balance_table["Metric"] = [
-        "Cash",
-        "Debt",
-        "Assets",
-        "Liabilities",
-        "Equity",
-        "Free Cash Flow",
-        "R&D",
-        "SG&A"
+    date_columns = [
+        "Filed",
+        "Start",
+        "End"
     ]
 
-    balance_table["Value"] = [
-        format_number(latest_cash),
-        format_number(latest_debt),
-        format_number(latest_assets),
-        format_number(latest_liabilities),
-        format_number(latest_equity),
-        format_number(free_cash_flow),
-        format_number(latest_rd),
-        format_number(latest_sga)
+    for col in date_columns:
+
+        if col in df.columns:
+
+            df[col] = pd.to_datetime(
+                df[col],
+                errors="coerce"
+            )
+
+    # =====================================================
+    # SORT
+    # =====================================================
+
+    sort_columns = [
+        col for col in [
+            "Metric",
+            "FY",
+            "FP",
+            "Filed"
+        ]
+        if col in df.columns
     ]
 
-    st.dataframe(
-        balance_table,
-        use_container_width=True,
-        hide_index=True
+    df = df.sort_values(
+        sort_columns
     )
+
+    # =====================================================
+    # EXPORT FULL RAW DATA
+    # =====================================================
+
+    raw_path = os.path.join(
+        OUTPUT_FOLDER,
+        f"{ticker}_all_xbrl.csv"
+    )
+
+    df.to_csv(
+        raw_path,
+        index=False
+    )
+
+    print(
+        f"\nFull XBRL exported:"
+    )
+
+    print(raw_path)
+
+    # =====================================================
+    # CREATE CLEANED FINANCIALS FILE
+    # =====================================================
+
+    clean_df = df.copy()
+
+    # =====================================================
+    # KEEP MOST IMPORTANT FORMS
+    # =====================================================
+
+    clean_df = clean_df[
+        clean_df["Form"].isin([
+            "10-K",
+            "10-Q"
+        ])
+    ]
+
+    # =====================================================
+    # REMOVE FUTURE DATES
+    # =====================================================
+
+    today = pd.Timestamp.now()
+
+    clean_df = clean_df[
+        (
+            clean_df["End"].isna()
+        )
+        |
+        (
+            clean_df["End"] <= today
+        )
+    ]
+
+    # =====================================================
+    # REMOVE EMPTY VALUES
+    # =====================================================
+
+    clean_df = clean_df.dropna(
+        subset=["Value"]
+    )
+
+    # =====================================================
+    # SORT
+    # =====================================================
+
+    clean_df = clean_df.sort_values([
+        "Metric",
+        "FY",
+        "FP",
+        "Filed"
+    ])
+
+    # =====================================================
+    # EXPORT CLEAN
+    # =====================================================
+
+    clean_path = os.path.join(
+        OUTPUT_FOLDER,
+        f"{ticker}_financials_clean.csv"
+    )
+
+    clean_df.to_csv(
+        clean_path,
+        index=False
+    )
+
+    print(
+        f"\nClean financials exported:"
+    )
+
+    print(clean_path)
+
+    # =====================================================
+    # SUMMARY
+    # =====================================================
+
+    unique_metrics = (
+        clean_df["Metric"]
+        .nunique()
+    )
+
+    total_rows = len(clean_df)
+
+    print("\n==============================")
+    print("EXPORT SUMMARY")
+    print("==============================")
+
+    print(
+        f"Metrics exported: {unique_metrics}"
+    )
+
+    print(
+        f"Rows exported: {total_rows:,}"
+    )
+
+    print("==============================\n")
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
+if __name__ == "__main__":
+
+    ticker = input(
+        "Ticker: "
+    ).upper()
+
+    export_all_xbrl(ticker)
