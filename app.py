@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# FULL CORRECTED VERSION
+# FINAL STABLE VERSION
 # =========================================================
 
 import streamlit as st
@@ -67,7 +67,7 @@ def get_company_facts(cik):
 
 
 # =========================================================
-# GET BEST METRIC DATASET
+# GET BEST METRIC
 # =========================================================
 
 def get_metric(data, keys):
@@ -136,7 +136,7 @@ def get_metric(data, keys):
 
 
 # =========================================================
-# CLEAN ANNUAL DATA
+# CLEAN ANNUAL
 # =========================================================
 
 def clean_annual(df):
@@ -156,7 +156,7 @@ def clean_annual(df):
         if col not in df.columns:
             return None
 
-    # Only annual
+    # Annual only
     df = df[
         df["fp"] == "FY"
     ].copy()
@@ -174,7 +174,7 @@ def clean_annual(df):
         subset=["val"]
     )
 
-    # Filed date
+    # Filed
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
@@ -184,16 +184,16 @@ def clean_annual(df):
         ["fy", "filed"]
     )
 
-    # Keep newest per fiscal year
+    # Keep newest
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
 
-    # Sort again
+    # Sort
     df = df.sort_values("fy")
 
-    # Keep last 5 years
+    # Last 5 years
     df = df.tail(5)
 
     return df
@@ -262,6 +262,8 @@ def build_quarters(df):
 
     years = years[-5:]
 
+    current_date = pd.Timestamp.now()
+
     for year in years:
 
         year_df = df[
@@ -308,7 +310,7 @@ def build_quarters(df):
             else None
         )
 
-        # True quarters
+        # REAL QUARTERS
 
         real_q1 = q1_val
 
@@ -316,6 +318,7 @@ def build_quarters(df):
         real_q3 = None
         real_q4 = None
 
+        # Q2
         if (
             q2_ytd is not None
             and q1_val is not None
@@ -325,6 +328,7 @@ def build_quarters(df):
                 q2_ytd - q1_val
             )
 
+        # Q3
         if (
             q3_ytd is not None
             and q2_ytd is not None
@@ -334,14 +338,18 @@ def build_quarters(df):
                 q3_ytd - q2_ytd
             )
 
+        # Q4
         if (
             fy_val is not None
             and q3_ytd is not None
         ):
 
-            real_q4 = (
-                fy_val - q3_ytd
-            )
+            # Avoid fake future Q4
+            if year < current_date.year:
+
+                real_q4 = (
+                    fy_val - q3_ytd
+                )
 
         quarters = {
             "Q1": real_q1,
@@ -353,14 +361,33 @@ def build_quarters(df):
         for q, value in quarters.items():
 
             if (
-                value is not None
-                and value > 0
+                value is None
+                or value <= 0
             ):
+                continue
 
-                rows.append({
-                    "Quarter": f"{year}-{q}",
-                    "Revenue": value
-                })
+            # Quarter dates
+            quarter_month = {
+                "Q1": 3,
+                "Q2": 6,
+                "Q3": 9,
+                "Q4": 12
+            }[q]
+
+            quarter_date = pd.Timestamp(
+                year=int(year),
+                month=quarter_month,
+                day=1
+            )
+
+            # Avoid future quarters
+            if quarter_date > current_date:
+                continue
+
+            rows.append({
+                "Quarter": f"{year}-{q}",
+                "Revenue": value
+            })
 
     if len(rows) == 0:
         return None
