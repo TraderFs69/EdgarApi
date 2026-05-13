@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# CORRECTED VERSION WITH RECENT YEARS FIX
+# FULL CORRECTED VERSION
 # =========================================================
 
 import streamlit as st
@@ -67,7 +67,7 @@ def get_company_facts(cik):
 
 
 # =========================================================
-# GET METRIC
+# GET BEST METRIC DATASET
 # =========================================================
 
 def get_metric(data, keys):
@@ -76,22 +76,61 @@ def get_metric(data, keys):
 
         us_gaap = data["facts"]["us-gaap"]
 
+        best_df = None
+
+        best_latest_year = 0
+
+        best_key = None
+
         for key in keys:
 
             if key in us_gaap:
 
                 units = us_gaap[key]["units"]
 
-                if "USD" in units:
+                if "USD" not in units:
+                    continue
 
-                    df = pd.DataFrame(
-                        units["USD"]
-                    )
+                df = pd.DataFrame(
+                    units["USD"]
+                )
 
-                    return df
+                if "fy" not in df.columns:
+                    continue
 
-    except:
-        pass
+                years = pd.to_numeric(
+                    df["fy"],
+                    errors="coerce"
+                )
+
+                years = years.dropna()
+
+                if len(years) == 0:
+                    continue
+
+                latest_year = years.max()
+
+                if latest_year > best_latest_year:
+
+                    best_latest_year = latest_year
+
+                    best_df = df
+
+                    best_key = key
+
+        if best_key is not None:
+
+            st.info(
+                f"Using XBRL tag: {best_key}"
+            )
+
+        return best_df
+
+    except Exception as e:
+
+        st.error(
+            f"Metric error: {e}"
+        )
 
     return None
 
@@ -117,7 +156,7 @@ def clean_annual(df):
         if col not in df.columns:
             return None
 
-    # ONLY FY
+    # Only annual
     df = df[
         df["fp"] == "FY"
     ].copy()
@@ -125,7 +164,7 @@ def clean_annual(df):
     if len(df) == 0:
         return None
 
-    # NUMERIC
+    # Numeric
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -135,28 +174,26 @@ def clean_annual(df):
         subset=["val"]
     )
 
-    # FILED DATE
+    # Filed date
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
 
-    # SORT
+    # Sort
     df = df.sort_values(
         ["fy", "filed"]
     )
 
-    # KEEP NEWEST PER YEAR
+    # Keep newest per fiscal year
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
 
-    # SORT AGAIN
-    df = df.sort_values(
-        "fy"
-    )
+    # Sort again
+    df = df.sort_values("fy")
 
-    # LAST 5 YEARS
+    # Keep last 5 years
     df = df.tail(5)
 
     return df
@@ -195,7 +232,7 @@ def build_quarters(df):
     if len(df) == 0:
         return None
 
-    # NUMERIC
+    # Numeric
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -205,12 +242,12 @@ def build_quarters(df):
         subset=["val"]
     )
 
-    # FILED DATE
+    # Filed
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
 
-    # SORT
+    # Sort
     df = df.sort_values(
         ["fy", "filed"]
     )
@@ -223,7 +260,6 @@ def build_quarters(df):
         .unique()
     )
 
-    # LAST 5 YEARS
     years = years[-5:]
 
     for year in years:
@@ -272,7 +308,7 @@ def build_quarters(df):
             else None
         )
 
-        # TRUE QUARTERS
+        # True quarters
 
         real_q1 = q1_val
 
@@ -280,7 +316,6 @@ def build_quarters(df):
         real_q3 = None
         real_q4 = None
 
-        # Q2
         if (
             q2_ytd is not None
             and q1_val is not None
@@ -290,7 +325,6 @@ def build_quarters(df):
                 q2_ytd - q1_val
             )
 
-        # Q3
         if (
             q3_ytd is not None
             and q2_ytd is not None
@@ -300,7 +334,6 @@ def build_quarters(df):
                 q3_ytd - q2_ytd
             )
 
-        # Q4
         if (
             fy_val is not None
             and q3_ytd is not None
@@ -354,7 +387,7 @@ def build_quarters(df):
 
 
 # =========================================================
-# GET LATEST VALUE
+# LATEST VALUE
 # =========================================================
 
 def latest(df):
