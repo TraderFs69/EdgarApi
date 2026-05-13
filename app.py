@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# FINAL CLEAN VERSION
+# CORRECTED VERSION WITH RECENT YEARS FIX
 # =========================================================
 
 import streamlit as st
@@ -105,7 +105,12 @@ def clean_annual(df):
     if df is None:
         return None
 
-    required = ["fy", "fp", "val"]
+    required = [
+        "fy",
+        "fp",
+        "val",
+        "filed"
+    ]
 
     for col in required:
 
@@ -113,7 +118,9 @@ def clean_annual(df):
             return None
 
     # ONLY FY
-    df = df[df["fp"] == "FY"].copy()
+    df = df[
+        df["fp"] == "FY"
+    ].copy()
 
     if len(df) == 0:
         return None
@@ -124,18 +131,32 @@ def clean_annual(df):
         errors="coerce"
     )
 
-    df = df.dropna(subset=["val"])
+    df = df.dropna(
+        subset=["val"]
+    )
+
+    # FILED DATE
+    df["filed"] = pd.to_datetime(
+        df["filed"]
+    )
 
     # SORT
-    df = df.sort_values("fy")
+    df = df.sort_values(
+        ["fy", "filed"]
+    )
 
-    # REMOVE DUPLICATES
+    # KEEP NEWEST PER YEAR
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
 
-    # KEEP LAST 5 YEARS
+    # SORT AGAIN
+    df = df.sort_values(
+        "fy"
+    )
+
+    # LAST 5 YEARS
     df = df.tail(5)
 
     return df
@@ -150,7 +171,12 @@ def build_quarters(df):
     if df is None:
         return None
 
-    required = ["fy", "fp", "val"]
+    required = [
+        "fy",
+        "fp",
+        "val",
+        "filed"
+    ]
 
     for col in required:
 
@@ -175,17 +201,26 @@ def build_quarters(df):
         errors="coerce"
     )
 
-    df = df.dropna(subset=["val"])
+    df = df.dropna(
+        subset=["val"]
+    )
+
+    # FILED DATE
+    df["filed"] = pd.to_datetime(
+        df["filed"]
+    )
 
     # SORT
     df = df.sort_values(
-        ["fy", "fp"]
+        ["fy", "filed"]
     )
 
     rows = []
 
     years = sorted(
-        df["fy"].dropna().unique()
+        df["fy"]
+        .dropna()
+        .unique()
     )
 
     # LAST 5 YEARS
@@ -193,7 +228,9 @@ def build_quarters(df):
 
     for year in years:
 
-        year_df = df[df["fy"] == year]
+        year_df = df[
+            df["fy"] == year
+        ].sort_values("filed")
 
         q1 = year_df[
             year_df["fp"] == "Q1"
@@ -317,7 +354,7 @@ def build_quarters(df):
 
 
 # =========================================================
-# LATEST VALUE
+# GET LATEST VALUE
 # =========================================================
 
 def latest(df):
@@ -366,7 +403,7 @@ ticker = st.text_input(
 if st.button("Analyze"):
 
     # =====================================================
-    # CIK
+    # GET CIK
     # =====================================================
 
     cik = get_cik_from_ticker(
@@ -392,7 +429,7 @@ if st.button("Analyze"):
     data = get_company_facts(cik)
 
     # =====================================================
-    # METRICS
+    # RAW METRICS
     # =====================================================
 
     revenue_raw = get_metric(
@@ -447,7 +484,7 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # CLEAN
+    # CLEAN DATA
     # =====================================================
 
     revenue = clean_annual(
@@ -527,7 +564,7 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # FCF
+    # FREE CASH FLOW
     # =====================================================
 
     free_cash_flow = None
@@ -694,7 +731,7 @@ if st.button("Analyze"):
         )
 
     # =====================================================
-    # ANNUAL TABLE
+    # TABLES
     # =====================================================
 
     st.subheader(
@@ -705,10 +742,6 @@ if st.button("Analyze"):
         revenue,
         use_container_width=True
     )
-
-    # =====================================================
-    # QUARTERLY TABLE
-    # =====================================================
 
     st.subheader(
         "Quarterly Revenue"
