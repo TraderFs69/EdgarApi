@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# COMPLETE CORRECTED VERSION
+# FINAL ROBUST VERSION
 # =========================================================
 
 import streamlit as st
@@ -185,7 +185,7 @@ def clean_annual(df):
         keep="last"
     )
 
-    # Sort again
+    # Sort
     df = df.sort_values("fy")
 
     # Last 5 years
@@ -208,7 +208,8 @@ def build_quarters(df):
         "fp",
         "val",
         "filed",
-        "form"
+        "form",
+        "end"
     ]
 
     for col in required:
@@ -257,12 +258,26 @@ def build_quarters(df):
     ]
 
     # =====================================================
-    # FILED DATE
+    # DATES
     # =====================================================
 
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
+
+    df["end"] = pd.to_datetime(
+        df["end"]
+    )
+
+    today = pd.Timestamp.now()
+
+    # =====================================================
+    # REMOVE FUTURE PERIODS
+    # =====================================================
+
+    df = df[
+        df["end"] <= today
+    ]
 
     # =====================================================
     # SORT
@@ -294,66 +309,74 @@ def build_quarters(df):
         # Q1
         # =================================================
 
-        q1 = year_df[
+        q1_df = year_df[
             (year_df["fp"] == "Q1")
             &
             (year_df["form"] == "10-Q")
-        ]["val"]
+        ]
+
+        q1 = q1_df["val"]
 
         # =================================================
-        # Q2 YTD
+        # Q2
         # =================================================
 
-        q2 = year_df[
+        q2_df = year_df[
             (year_df["fp"] == "Q2")
             &
             (year_df["form"] == "10-Q")
-        ]["val"]
+        ]
+
+        q2 = q2_df["val"]
 
         # =================================================
-        # Q3 YTD
+        # Q3
         # =================================================
 
-        q3 = year_df[
+        q3_df = year_df[
             (year_df["fp"] == "Q3")
             &
             (year_df["form"] == "10-Q")
-        ]["val"]
+        ]
+
+        q3 = q3_df["val"]
 
         # =================================================
         # FY
         # =================================================
 
-        fy = year_df[
+        fy_df = year_df[
             (year_df["fp"] == "FY")
             &
             (year_df["form"] == "10-K")
-        ]["val"]
+        ]
+
+        fy = fy_df["val"]
 
         # =================================================
         # VALUES
         # =================================================
 
         q1_val = (
-            q1.iloc[-1]
+            q1.max()
             if len(q1)
             else None
         )
 
         q2_ytd = (
-            q2.iloc[-1]
+            q2.max()
             if len(q2)
             else None
         )
 
         q3_ytd = (
-            q3.iloc[-1]
+            q3.max()
             if len(q3)
             else None
         )
 
         fy_val = (
-            fy.iloc[-1]
+            fy.max()
             if len(fy)
             else None
         )
@@ -494,10 +517,6 @@ ticker = st.text_input(
 
 if st.button("Analyze"):
 
-    # =====================================================
-    # GET CIK
-    # =====================================================
-
     cik = get_cik_from_ticker(
         ticker
     )
@@ -617,7 +636,10 @@ if st.button("Analyze"):
             use_container_width=True
         )
 
-        # Validation
+        # =================================================
+        # VALIDATION
+        # =================================================
+
         st.subheader(
             "Quarter Validation"
         )
