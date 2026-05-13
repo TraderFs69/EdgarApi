@@ -1,7 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# CLEAN XBRL VERSION
-# Reliable Financial Extraction
+# FINAL CLEAN VERSION
 # =========================================================
 
 import streamlit as st
@@ -23,7 +22,7 @@ st.set_page_config(
 )
 
 # =========================================================
-# FUNCTIONS
+# GET CIK
 # =========================================================
 
 @st.cache_data
@@ -46,6 +45,10 @@ def get_cik_from_ticker(ticker):
 
     return None
 
+
+# =========================================================
+# GET COMPANY FACTS
+# =========================================================
 
 @st.cache_data
 def get_company_facts(cik):
@@ -109,14 +112,13 @@ def clean_annual(df):
         if col not in df.columns:
             return None
 
+    # ONLY FY
     df = df[df["fp"] == "FY"].copy()
 
     if len(df) == 0:
         return None
 
-    if "frame" in df.columns:
-        df = df[df["frame"].isna()]
-
+    # NUMERIC
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -124,12 +126,17 @@ def clean_annual(df):
 
     df = df.dropna(subset=["val"])
 
+    # SORT
     df = df.sort_values("fy")
 
+    # REMOVE DUPLICATES
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
+
+    # KEEP LAST 5 YEARS
+    df = df.tail(5)
 
     return df
 
@@ -162,9 +169,7 @@ def build_quarters(df):
     if len(df) == 0:
         return None
 
-    if "frame" in df.columns:
-        df = df[df["frame"].isna()]
-
+    # NUMERIC
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -172,11 +177,19 @@ def build_quarters(df):
 
     df = df.dropna(subset=["val"])
 
+    # SORT
+    df = df.sort_values(
+        ["fy", "fp"]
+    )
+
     rows = []
 
     years = sorted(
         df["fy"].dropna().unique()
     )
+
+    # LAST 5 YEARS
+    years = years[-5:]
 
     for year in years:
 
@@ -230,6 +243,7 @@ def build_quarters(df):
         real_q3 = None
         real_q4 = None
 
+        # Q2
         if (
             q2_ytd is not None
             and q1_val is not None
@@ -239,6 +253,7 @@ def build_quarters(df):
                 q2_ytd - q1_val
             )
 
+        # Q3
         if (
             q3_ytd is not None
             and q2_ytd is not None
@@ -248,6 +263,7 @@ def build_quarters(df):
                 q3_ytd - q2_ytd
             )
 
+        # Q4
         if (
             fy_val is not None
             and q3_ytd is not None
@@ -285,11 +301,13 @@ def build_quarters(df):
         "Quarter"
     )
 
+    # QoQ
     result["QoQ Growth %"] = (
         result["Revenue"]
         .pct_change() * 100
     )
 
+    # YoY
     result["YoY Growth %"] = (
         result["Revenue"]
         .pct_change(4) * 100
@@ -299,7 +317,7 @@ def build_quarters(df):
 
 
 # =========================================================
-# GET LATEST VALUE
+# LATEST VALUE
 # =========================================================
 
 def latest(df):
@@ -314,7 +332,7 @@ def latest(df):
 
 
 # =========================================================
-# GROWTH
+# ADD GROWTH
 # =========================================================
 
 def add_growth(df):
@@ -348,7 +366,7 @@ ticker = st.text_input(
 if st.button("Analyze"):
 
     # =====================================================
-    # GET CIK
+    # CIK
     # =====================================================
 
     cik = get_cik_from_ticker(
@@ -368,13 +386,13 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # GET DATA
+    # LOAD DATA
     # =====================================================
 
     data = get_company_facts(cik)
 
     # =====================================================
-    # RAW METRICS
+    # METRICS
     # =====================================================
 
     revenue_raw = get_metric(
@@ -429,7 +447,7 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # CLEAN DATA
+    # CLEAN
     # =====================================================
 
     revenue = clean_annual(
@@ -509,7 +527,7 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # FREE CASH FLOW
+    # FCF
     # =====================================================
 
     free_cash_flow = None
@@ -574,7 +592,7 @@ if st.button("Analyze"):
         ) * 100
 
     # =====================================================
-    # REVENUE GROWTH
+    # GROWTH
     # =====================================================
 
     latest_growth = None
