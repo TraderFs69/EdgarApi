@@ -1,7 +1,7 @@
 # =========================================================
 # export_all_xbrl.py
 # TEA Institutional Full XBRL Exporter
-# Export ALL available SEC financial data
+# OPTIMIZED VERSION
 # =========================================================
 
 import pandas as pd
@@ -69,7 +69,7 @@ def get_company_facts(cik):
 
 
 # =========================================================
-# EXPORT ALL US-GAAP TAGS
+# EXPORT ALL XBRL
 # =========================================================
 
 def export_all_xbrl(ticker):
@@ -99,12 +99,12 @@ def export_all_xbrl(ticker):
 
     if "facts" not in data:
 
-        print("No facts found.")
+        print("No facts section found.")
         return
 
     if "us-gaap" not in data["facts"]:
 
-        print("No us-gaap section.")
+        print("No us-gaap section found.")
         return
 
     us_gaap = data["facts"]["us-gaap"]
@@ -115,11 +115,22 @@ def export_all_xbrl(ticker):
 
     rows = []
 
+    metric_count = len(us_gaap)
+
+    current_metric = 0
+
     # =====================================================
     # LOOP THROUGH ALL METRICS
     # =====================================================
 
     for metric_name, metric_data in us_gaap.items():
+
+        current_metric += 1
+
+        print(
+            f"[{current_metric}/{metric_count}] "
+            f"{metric_name}"
+        )
 
         try:
 
@@ -134,11 +145,58 @@ def export_all_xbrl(ticker):
                 "units"
             ].items():
 
-                # =================================================
-                # LOOP THROUGH ENTRIES
-                # =================================================
+                # =============================================
+                # KEEP ONLY IMPORTANT UNITS
+                # =============================================
+
+                if unit_name not in [
+                    "USD",
+                    "shares",
+                    "USD/shares"
+                ]:
+                    continue
+
+                # =============================================
+                # LOOP THROUGH VALUES
+                # =============================================
 
                 for item in values:
+
+                    # =========================================
+                    # KEEP ONLY IMPORTANT FORMS
+                    # =========================================
+
+                    form = item.get("form")
+
+                    if form not in [
+                        "10-K",
+                        "10-Q"
+                    ]:
+                        continue
+
+                    # =========================================
+                    # REMOVE FUTURE PERIODS
+                    # =========================================
+
+                    end_date = item.get("end")
+
+                    if end_date is not None:
+
+                        try:
+
+                            end_date = pd.to_datetime(
+                                end_date
+                            )
+
+                            if end_date > pd.Timestamp.now():
+                                continue
+
+                        except:
+                            pass
+
+                    # =========================================
+                    # CREATE ROW
+                    # =========================================
 
                     row = {
                         "Ticker": ticker,
@@ -147,22 +205,33 @@ def export_all_xbrl(ticker):
                         "Value": item.get("val"),
                         "FY": item.get("fy"),
                         "FP": item.get("fp"),
-                        "Form": item.get("form"),
+                        "Form": form,
                         "Filed": item.get("filed"),
                         "Frame": item.get("frame"),
                         "Start": item.get("start"),
                         "End": item.get("end"),
-                        "Fiscal Year": item.get("fy"),
-                        "Fiscal Period": item.get("fp"),
                         "Accession": item.get("accn")
                     }
 
                     rows.append(row)
 
+                    # =========================================
+                    # SAFETY LIMIT
+                    # =========================================
+
+                    if len(rows) > 500000:
+
+                        print(
+                            "\nSafety stop reached."
+                        )
+
+                        break
+
         except Exception as e:
 
             print(
-                f"Error on metric {metric_name}: {e}"
+                f"Error on metric "
+                f"{metric_name}: {e}"
             )
 
     # =====================================================
@@ -180,13 +249,11 @@ def export_all_xbrl(ticker):
     # CLEAN DATES
     # =====================================================
 
-    date_columns = [
+    for col in [
         "Filed",
         "Start",
         "End"
-    ]
-
-    for col in date_columns:
+    ]:
 
         if col in df.columns:
 
@@ -199,22 +266,21 @@ def export_all_xbrl(ticker):
     # SORT
     # =====================================================
 
-    sort_columns = [
-        col for col in [
-            "Metric",
-            "FY",
-            "FP",
-            "Filed"
-        ]
-        if col in df.columns
-    ]
-
-    df = df.sort_values(
-        sort_columns
-    )
+    df = df.sort_values([
+        "Metric",
+        "FY",
+        "FP",
+        "Filed"
+    ])
 
     # =====================================================
-    # EXPORT FULL RAW DATA
+    # REMOVE DUPLICATES
+    # =====================================================
+
+    df = df.drop_duplicates()
+
+    # =====================================================
+    # EXPORT RAW
     # =====================================================
 
     raw_path = os.path.join(
@@ -227,55 +293,20 @@ def export_all_xbrl(ticker):
         index=False
     )
 
-    print(
-        f"\nFull XBRL exported:"
-    )
+    print("\n==============================")
+    print("RAW EXPORT COMPLETE")
+    print("==============================")
 
     print(raw_path)
 
     # =====================================================
-    # CREATE CLEANED FINANCIALS FILE
+    # CREATE CLEAN FINANCIALS
     # =====================================================
 
     clean_df = df.copy()
 
     # =====================================================
-    # KEEP MOST IMPORTANT FORMS
-    # =====================================================
-
-    clean_df = clean_df[
-        clean_df["Form"].isin([
-            "10-K",
-            "10-Q"
-        ])
-    ]
-
-    # =====================================================
-    # REMOVE FUTURE DATES
-    # =====================================================
-
-    today = pd.Timestamp.now()
-
-    clean_df = clean_df[
-        (
-            clean_df["End"].isna()
-        )
-        |
-        (
-            clean_df["End"] <= today
-        )
-    ]
-
-    # =====================================================
-    # REMOVE EMPTY VALUES
-    # =====================================================
-
-    clean_df = clean_df.dropna(
-        subset=["Value"]
-    )
-
-    # =====================================================
-    # SORT
+    # KEEP LATEST FILING
     # =====================================================
 
     clean_df = clean_df.sort_values([
@@ -283,6 +314,27 @@ def export_all_xbrl(ticker):
         "FY",
         "FP",
         "Filed"
+    ])
+
+    clean_df = clean_df.drop_duplicates(
+        subset=[
+            "Metric",
+            "FY",
+            "FP",
+            "Form",
+            "Frame"
+        ],
+        keep="last"
+    )
+
+    # =====================================================
+    # SORT AGAIN
+    # =====================================================
+
+    clean_df = clean_df.sort_values([
+        "Metric",
+        "FY",
+        "FP"
     ])
 
     # =====================================================
@@ -299,9 +351,9 @@ def export_all_xbrl(ticker):
         index=False
     )
 
-    print(
-        f"\nClean financials exported:"
-    )
+    print("\n==============================")
+    print("CLEAN EXPORT COMPLETE")
+    print("==============================")
 
     print(clean_path)
 
@@ -321,11 +373,13 @@ def export_all_xbrl(ticker):
     print("==============================")
 
     print(
-        f"Metrics exported: {unique_metrics}"
+        f"Metrics exported: "
+        f"{unique_metrics}"
     )
 
     print(
-        f"Rows exported: {total_rows:,}"
+        f"Rows exported: "
+        f"{total_rows:,}"
     )
 
     print("==============================\n")
