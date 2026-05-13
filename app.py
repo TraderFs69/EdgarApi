@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# FINAL ROBUST VERSION
+# FULL VERSION WITH IMPORTANT METRICS
 # =========================================================
 
 import streamlit as st
@@ -20,6 +20,42 @@ st.set_page_config(
     page_title="TEA Institutional Scanner",
     layout="wide"
 )
+
+# =========================================================
+# FORMATTERS
+# =========================================================
+
+def format_number(value):
+
+    if value is None:
+        return "N/A"
+
+    value = float(value)
+
+    abs_value = abs(value)
+
+    if abs_value >= 1_000_000_000_000:
+        return f"{value / 1_000_000_000_000:.2f}T"
+
+    elif abs_value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f}B"
+
+    elif abs_value >= 1_000_000:
+        return f"{value / 1_000_000:.2f}M"
+
+    elif abs_value >= 1_000:
+        return f"{value / 1_000:.2f}K"
+
+    return f"{value:,.0f}"
+
+
+def format_percent(value):
+
+    if value is None:
+        return "N/A"
+
+    return f"{value:.2f}%"
+
 
 # =========================================================
 # GET CIK
@@ -151,7 +187,6 @@ def clean_annual(df):
         if col not in df.columns:
             return None
 
-    # Annual only
     df = df[
         df["fp"] == "FY"
     ].copy()
@@ -159,7 +194,6 @@ def clean_annual(df):
     if len(df) == 0:
         return None
 
-    # Numeric
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -169,323 +203,29 @@ def clean_annual(df):
         subset=["val"]
     )
 
-    # Filed date
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
 
-    # Sort
     df = df.sort_values(
         ["fy", "filed"]
     )
 
-    # Keep newest filing
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
 
-    # Sort
     df = df.sort_values("fy")
 
-    # Last 5 years
     df = df.tail(5)
 
     return df
 
 
 # =========================================================
-# BUILD TRUE QUARTERS
+# ADD GROWTH
 # =========================================================
-
-def build_quarters(df):
-
-    if df is None:
-        return None
-
-    required = [
-        "fy",
-        "fp",
-        "val",
-        "filed",
-        "form",
-        "end"
-    ]
-
-    for col in required:
-
-        if col not in df.columns:
-            return None
-
-    # =====================================================
-    # KEEP ONLY RELEVANT PERIODS
-    # =====================================================
-
-    df = df[
-        df["fp"].isin([
-            "Q1",
-            "Q2",
-            "Q3",
-            "FY"
-        ])
-    ].copy()
-
-    if len(df) == 0:
-        return None
-
-    # =====================================================
-    # NUMERIC
-    # =====================================================
-
-    df["val"] = pd.to_numeric(
-        df["val"],
-        errors="coerce"
-    )
-
-    df = df.dropna(
-        subset=["val"]
-    )
-
-    # =====================================================
-    # KEEP ONLY REAL FILINGS
-    # =====================================================
-
-    df = df[
-        df["form"].isin([
-            "10-Q",
-            "10-K"
-        ])
-    ]
-
-    # =====================================================
-    # DATES
-    # =====================================================
-
-    df["filed"] = pd.to_datetime(
-        df["filed"]
-    )
-
-    df["end"] = pd.to_datetime(
-        df["end"]
-    )
-
-    today = pd.Timestamp.now()
-
-    # =====================================================
-    # REMOVE FUTURE PERIODS
-    # =====================================================
-
-    df = df[
-        df["end"] <= today
-    ]
-
-    # =====================================================
-    # SORT
-    # =====================================================
-
-    df = df.sort_values(
-        ["fy", "filed"]
-    )
-
-    rows = []
-
-    years = sorted(
-        df["fy"]
-        .dropna()
-        .unique()
-    )
-
-    years = years[-5:]
-
-    current_year = pd.Timestamp.now().year
-
-    for year in years:
-
-        year_df = df[
-            df["fy"] == year
-        ].sort_values("filed")
-
-        # =================================================
-        # Q1
-        # =================================================
-
-        q1_df = year_df[
-            (year_df["fp"] == "Q1")
-            &
-            (year_df["form"] == "10-Q")
-        ]
-
-        q1 = q1_df["val"]
-
-        # =================================================
-        # Q2
-        # =================================================
-
-        q2_df = year_df[
-            (year_df["fp"] == "Q2")
-            &
-            (year_df["form"] == "10-Q")
-        ]
-
-        q2 = q2_df["val"]
-
-        # =================================================
-        # Q3
-        # =================================================
-
-        q3_df = year_df[
-            (year_df["fp"] == "Q3")
-            &
-            (year_df["form"] == "10-Q")
-        ]
-
-        q3 = q3_df["val"]
-
-        # =================================================
-        # FY
-        # =================================================
-
-        fy_df = year_df[
-            (year_df["fp"] == "FY")
-            &
-            (year_df["form"] == "10-K")
-        ]
-
-        fy = fy_df["val"]
-
-        # =================================================
-        # VALUES
-        # =================================================
-
-        q1_val = (
-            q1.max()
-            if len(q1)
-            else None
-        )
-
-        q2_ytd = (
-            q2.max()
-            if len(q2)
-            else None
-        )
-
-        q3_ytd = (
-            q3.max()
-            if len(q3)
-            else None
-        )
-
-        fy_val = (
-            fy.max()
-            if len(fy)
-            else None
-        )
-
-        # =================================================
-        # TRUE QUARTERS
-        # =================================================
-
-        real_q1 = q1_val
-
-        real_q2 = None
-        real_q3 = None
-        real_q4 = None
-
-        # Q2
-        if (
-            q2_ytd is not None
-            and q1_val is not None
-        ):
-
-            real_q2 = (
-                q2_ytd - q1_val
-            )
-
-        # Q3
-        if (
-            q3_ytd is not None
-            and q2_ytd is not None
-        ):
-
-            real_q3 = (
-                q3_ytd - q2_ytd
-            )
-
-        # Q4
-        if (
-            fy_val is not None
-            and q3_ytd is not None
-            and year < current_year
-        ):
-
-            real_q4 = (
-                fy_val - q3_ytd
-            )
-
-        quarters = {
-            "Q1": real_q1,
-            "Q2": real_q2,
-            "Q3": real_q3,
-            "Q4": real_q4
-        }
-
-        # =================================================
-        # STORE
-        # =================================================
-
-        for q, value in quarters.items():
-
-            if (
-                value is None
-                or value <= 0
-            ):
-                continue
-
-            rows.append({
-                "Quarter": f"{year}-{q}",
-                "Revenue": value
-            })
-
-    if len(rows) == 0:
-        return None
-
-    result = pd.DataFrame(rows)
-
-    result = result.sort_values(
-        "Quarter"
-    )
-
-    # =====================================================
-    # GROWTH
-    # =====================================================
-
-    result["QoQ Growth %"] = (
-        result["Revenue"]
-        .pct_change() * 100
-    )
-
-    result["YoY Growth %"] = (
-        result["Revenue"]
-        .pct_change(4) * 100
-    )
-
-    return result
-
-
-# =========================================================
-# HELPERS
-# =========================================================
-
-def latest(df):
-
-    if df is None:
-        return None
-
-    if len(df) == 0:
-        return None
-
-    return df.iloc[-1]["val"]
-
 
 def add_growth(df):
 
@@ -503,6 +243,21 @@ def add_growth(df):
 
 
 # =========================================================
+# LATEST VALUE
+# =========================================================
+
+def latest(df):
+
+    if df is None:
+        return None
+
+    if len(df) == 0:
+        return None
+
+    return df.iloc[-1]["val"]
+
+
+# =========================================================
 # UI
 # =========================================================
 
@@ -516,6 +271,10 @@ ticker = st.text_input(
 )
 
 if st.button("Analyze"):
+
+    # =====================================================
+    # CIK
+    # =====================================================
 
     cik = get_cik_from_ticker(
         ticker
@@ -540,7 +299,7 @@ if st.button("Analyze"):
     data = get_company_facts(cik)
 
     # =====================================================
-    # REVENUE
+    # IMPORTANT METRICS
     # =====================================================
 
     revenue_raw = get_metric(
@@ -552,25 +311,250 @@ if st.button("Analyze"):
         ]
     )
 
-    # =====================================================
-    # CLEAN
-    # =====================================================
-
-    revenue = clean_annual(
-        revenue_raw
+    gross_profit_raw = get_metric(
+        data,
+        [
+            "GrossProfit"
+        ]
     )
 
-    quarterly_revenue = build_quarters(
-        revenue_raw
+    operating_income_raw = get_metric(
+        data,
+        [
+            "OperatingIncomeLoss"
+        ]
     )
+
+    net_income_raw = get_metric(
+        data,
+        [
+            "NetIncomeLoss"
+        ]
+    )
+
+    cash_raw = get_metric(
+        data,
+        [
+            "CashAndCashEquivalentsAtCarryingValue"
+        ]
+    )
+
+    assets_raw = get_metric(
+        data,
+        [
+            "Assets"
+        ]
+    )
+
+    liabilities_raw = get_metric(
+        data,
+        [
+            "Liabilities"
+        ]
+    )
+
+    equity_raw = get_metric(
+        data,
+        [
+            "StockholdersEquity",
+            "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"
+        ]
+    )
+
+    debt_raw = get_metric(
+        data,
+        [
+            "LongTermDebt",
+            "LongTermDebtNoncurrent"
+        ]
+    )
+
+    operating_cf_raw = get_metric(
+        data,
+        [
+            "NetCashProvidedByUsedInOperatingActivities"
+        ]
+    )
+
+    capex_raw = get_metric(
+        data,
+        [
+            "PaymentsToAcquirePropertyPlantAndEquipment"
+        ]
+    )
+
+    rd_raw = get_metric(
+        data,
+        [
+            "ResearchAndDevelopmentExpense"
+        ]
+    )
+
+    sga_raw = get_metric(
+        data,
+        [
+            "SellingGeneralAndAdministrativeExpense"
+        ]
+    )
+
+    # =====================================================
+    # CLEAN DATA
+    # =====================================================
 
     revenue = add_growth(
-        revenue
+        clean_annual(revenue_raw)
     )
 
-    latest_revenue = latest(
-        revenue
+    gross_profit = add_growth(
+        clean_annual(gross_profit_raw)
     )
+
+    operating_income = add_growth(
+        clean_annual(operating_income_raw)
+    )
+
+    net_income = add_growth(
+        clean_annual(net_income_raw)
+    )
+
+    cash = clean_annual(cash_raw)
+
+    assets = clean_annual(assets_raw)
+
+    liabilities = clean_annual(liabilities_raw)
+
+    equity = clean_annual(equity_raw)
+
+    debt = clean_annual(debt_raw)
+
+    operating_cf = add_growth(
+        clean_annual(operating_cf_raw)
+    )
+
+    capex = clean_annual(capex_raw)
+
+    rd = clean_annual(rd_raw)
+
+    sga = clean_annual(sga_raw)
+
+    # =====================================================
+    # LATEST VALUES
+    # =====================================================
+
+    latest_revenue = latest(revenue)
+    latest_gross_profit = latest(gross_profit)
+    latest_operating_income = latest(operating_income)
+    latest_net_income = latest(net_income)
+    latest_cash = latest(cash)
+    latest_assets = latest(assets)
+    latest_liabilities = latest(liabilities)
+    latest_equity = latest(equity)
+    latest_debt = latest(debt)
+    latest_ocf = latest(operating_cf)
+    latest_capex = latest(capex)
+    latest_rd = latest(rd)
+    latest_sga = latest(sga)
+
+    # =====================================================
+    # FREE CASH FLOW
+    # =====================================================
+
+    free_cash_flow = None
+
+    if (
+        latest_ocf is not None
+        and latest_capex is not None
+    ):
+
+        free_cash_flow = (
+            latest_ocf
+            - abs(latest_capex)
+        )
+
+    # =====================================================
+    # MARGINS
+    # =====================================================
+
+    gross_margin = None
+    operating_margin = None
+    net_margin = None
+    fcf_margin = None
+
+    if (
+        latest_revenue is not None
+        and latest_gross_profit is not None
+    ):
+
+        gross_margin = (
+            latest_gross_profit
+            / latest_revenue
+        ) * 100
+
+    if (
+        latest_revenue is not None
+        and latest_operating_income is not None
+    ):
+
+        operating_margin = (
+            latest_operating_income
+            / latest_revenue
+        ) * 100
+
+    if (
+        latest_revenue is not None
+        and latest_net_income is not None
+    ):
+
+        net_margin = (
+            latest_net_income
+            / latest_revenue
+        ) * 100
+
+    if (
+        latest_revenue is not None
+        and free_cash_flow is not None
+    ):
+
+        fcf_margin = (
+            free_cash_flow
+            / latest_revenue
+        ) * 100
+
+    # =====================================================
+    # ROE
+    # =====================================================
+
+    roe = None
+
+    if (
+        latest_equity is not None
+        and latest_net_income is not None
+    ):
+
+        roe = (
+            latest_net_income
+            / latest_equity
+        ) * 100
+
+    # =====================================================
+    # DEBT TO EQUITY
+    # =====================================================
+
+    debt_to_equity = None
+
+    if (
+        latest_equity is not None
+        and latest_debt is not None
+    ):
+
+        debt_to_equity = (
+            latest_debt
+            / latest_equity
+        )
+
+    # =====================================================
+    # REVENUE GROWTH
+    # =====================================================
 
     latest_growth = None
 
@@ -581,35 +565,201 @@ if st.button("Analyze"):
         ]
 
     # =====================================================
+    # RULE OF 40
+    # =====================================================
+
+    rule_of_40 = None
+
+    if (
+        latest_growth is not None
+        and operating_margin is not None
+    ):
+
+        rule_of_40 = (
+            latest_growth
+            + operating_margin
+        )
+
+    # =====================================================
     # DISPLAY
     # =====================================================
 
     st.subheader(
-        "Key Metrics"
+        "Important Metrics"
     )
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
 
         st.metric(
             "Revenue",
-            f"${latest_revenue:,.0f}"
-            if latest_revenue
-            else "N/A"
+            format_number(
+                latest_revenue
+            )
+        )
+
+        st.metric(
+            "Revenue Growth",
+            format_percent(
+                latest_growth
+            )
+        )
+
+        st.metric(
+            "Gross Profit",
+            format_number(
+                latest_gross_profit
+            )
+        )
+
+        st.metric(
+            "Gross Margin",
+            format_percent(
+                gross_margin
+            )
         )
 
     with col2:
 
         st.metric(
-            "Revenue Growth %",
-            f"{latest_growth:.2f}%"
-            if latest_growth is not None
-            else "N/A"
+            "Operating Income",
+            format_number(
+                latest_operating_income
+            )
+        )
+
+        st.metric(
+            "Operating Margin",
+            format_percent(
+                operating_margin
+            )
+        )
+
+        st.metric(
+            "Net Income",
+            format_number(
+                latest_net_income
+            )
+        )
+
+        st.metric(
+            "Net Margin",
+            format_percent(
+                net_margin
+            )
+        )
+
+    with col3:
+
+        st.metric(
+            "Operating Cash Flow",
+            format_number(
+                latest_ocf
+            )
+        )
+
+        st.metric(
+            "Free Cash Flow",
+            format_number(
+                free_cash_flow
+            )
+        )
+
+        st.metric(
+            "FCF Margin",
+            format_percent(
+                fcf_margin
+            )
+        )
+
+        st.metric(
+            "Rule of 40",
+            format_percent(
+                rule_of_40
+            )
+        )
+
+    with col4:
+
+        st.metric(
+            "Cash",
+            format_number(
+                latest_cash
+            )
+        )
+
+        st.metric(
+            "Debt",
+            format_number(
+                latest_debt
+            )
+        )
+
+        st.metric(
+            "ROE",
+            format_percent(
+                roe
+            )
+        )
+
+        st.metric(
+            "Debt / Equity",
+            (
+                f"{debt_to_equity:.2f}"
+                if debt_to_equity is not None
+                else "N/A"
+            )
         )
 
     # =====================================================
-    # ANNUAL TABLE
+    # EXTRA METRICS
+    # =====================================================
+
+    st.subheader(
+        "Additional Metrics"
+    )
+
+    col5, col6, col7, col8 = st.columns(4)
+
+    with col5:
+
+        st.metric(
+            "Assets",
+            format_number(
+                latest_assets
+            )
+        )
+
+    with col6:
+
+        st.metric(
+            "Liabilities",
+            format_number(
+                latest_liabilities
+            )
+        )
+
+    with col7:
+
+        st.metric(
+            "R&D",
+            format_number(
+                latest_rd
+            )
+        )
+
+    with col8:
+
+        st.metric(
+            "SG&A",
+            format_number(
+                latest_sga
+            )
+        )
+
+    # =====================================================
+    # TABLES
     # =====================================================
 
     st.subheader(
@@ -622,81 +772,17 @@ if st.button("Analyze"):
     )
 
     # =====================================================
-    # QUARTERLY TABLE
+    # CHART
     # =====================================================
 
-    st.subheader(
-        "Quarterly Revenue"
-    )
-
-    if quarterly_revenue is not None:
-
-        st.dataframe(
-            quarterly_revenue,
-            use_container_width=True
-        )
-
-        # =================================================
-        # VALIDATION
-        # =================================================
-
-        st.subheader(
-            "Quarter Validation"
-        )
-
-        validation = (
-            quarterly_revenue
-            .groupby(
-                quarterly_revenue[
-                    "Quarter"
-                ].str[:4]
-            )["Revenue"]
-            .sum()
-            .reset_index()
-        )
-
-        validation.columns = [
-            "Year",
-            "Quarter Sum"
-        ]
-
-        st.dataframe(
-            validation,
-            use_container_width=True
-        )
-
-    else:
-
-        st.warning(
-            "Quarterly revenue unavailable"
-        )
-
-    # =====================================================
-    # CHARTS
-    # =====================================================
-
-    fig_annual = px.line(
+    fig = px.line(
         revenue,
         x="fy",
         y="val",
-        title=f"{ticker} Annual Revenue"
+        title=f"{ticker} Revenue"
     )
 
     st.plotly_chart(
-        fig_annual,
+        fig,
         use_container_width=True
     )
-
-    if quarterly_revenue is not None:
-
-        fig_q = px.line(
-            quarterly_revenue,
-            x="Quarter",
-            y="Revenue",
-            title=f"{ticker} Quarterly Revenue"
-        )
-
-        st.plotly_chart(
-            fig_q,
-            use_container_width=True
-        )
