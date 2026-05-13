@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# TRUE QUARTER NORMALIZATION VERSION
+# FINAL VERSION - CORRECT Q4 LOGIC
 # =========================================================
 
 import streamlit as st
@@ -245,17 +245,9 @@ def build_quarters(df):
         df["end"]
     )
 
-    # =====================================================
-    # DURATION
-    # =====================================================
-
     df["days"] = (
         df["end"] - df["start"]
     ).dt.days
-
-    # =====================================================
-    # SORT
-    # =====================================================
 
     df = df.sort_values(
         ["fy", "filed"]
@@ -282,7 +274,7 @@ def build_quarters(df):
         quarter_values = {}
 
         # =================================================
-        # PROCESS EACH PERIOD
+        # STORE PERIODS
         # =================================================
 
         for period in ["Q1", "Q2", "Q3", "FY"]:
@@ -296,17 +288,13 @@ def build_quarters(df):
 
             row = subset.iloc[-1]
 
-            value = row["val"]
-
-            days = row["days"]
-
             quarter_values[period] = {
-                "value": value,
-                "days": days
+                "value": row["val"],
+                "days": row["days"]
             }
 
         # =================================================
-        # TRUE QUARTERS
+        # REAL QUARTERS
         # =================================================
 
         real_q1 = None
@@ -314,9 +302,9 @@ def build_quarters(df):
         real_q3 = None
         real_q4 = None
 
-        # =============================
+        # =================================================
         # Q1
-        # =============================
+        # =================================================
 
         if "Q1" in quarter_values:
 
@@ -324,9 +312,9 @@ def build_quarters(df):
                 quarter_values["Q1"]["value"]
             )
 
-        # =============================
+        # =================================================
         # Q2
-        # =============================
+        # =================================================
 
         if "Q2" in quarter_values:
 
@@ -338,12 +326,12 @@ def build_quarters(df):
                 quarter_values["Q2"]["days"]
             )
 
-            # Standalone quarter
+            # Standalone
             if q2_days <= 120:
 
                 real_q2 = q2_val
 
-            # YTD cumulative
+            # Cumulative
             else:
 
                 if real_q1 is not None:
@@ -352,9 +340,9 @@ def build_quarters(df):
                         q2_val - real_q1
                     )
 
-        # =============================
+        # =================================================
         # Q3
-        # =============================
+        # =================================================
 
         if "Q3" in quarter_values:
 
@@ -386,9 +374,9 @@ def build_quarters(df):
                         q3_val - q2_total
                     )
 
-        # =============================
+        # =================================================
         # Q4
-        # =============================
+        # =================================================
 
         if (
             "FY" in quarter_values
@@ -399,20 +387,47 @@ def build_quarters(df):
                 quarter_values["FY"]["value"]
             )
 
-            q3_total = (
-                quarter_values["Q3"]["value"]
-                if "Q3" in quarter_values
-                else None
-            )
+            if "Q3" in quarter_values:
 
-            if q3_total is not None:
-
-                real_q4 = (
-                    fy_val - q3_total
+                q3_val = (
+                    quarter_values["Q3"]["value"]
                 )
 
+                q3_days = (
+                    quarter_values["Q3"]["days"]
+                )
+
+                # =========================================
+                # Q3 STANDALONE
+                # =========================================
+
+                if q3_days <= 120:
+
+                    total = 0
+
+                    if real_q1 is not None:
+                        total += real_q1
+
+                    if real_q2 is not None:
+                        total += real_q2
+
+                    if real_q3 is not None:
+                        total += real_q3
+
+                    real_q4 = fy_val - total
+
+                # =========================================
+                # Q3 CUMULATIVE
+                # =========================================
+
+                else:
+
+                    real_q4 = (
+                        fy_val - q3_val
+                    )
+
         # =================================================
-        # STORE
+        # STORE QUARTERS
         # =================================================
 
         quarters = {
@@ -558,48 +573,6 @@ if st.button("Analyze"):
         ]
     )
 
-    operating_income_raw = get_metric(
-        data,
-        [
-            "OperatingIncomeLoss"
-        ]
-    )
-
-    gross_profit_raw = get_metric(
-        data,
-        [
-            "GrossProfit"
-        ]
-    )
-
-    net_income_raw = get_metric(
-        data,
-        [
-            "NetIncomeLoss"
-        ]
-    )
-
-    operating_cf_raw = get_metric(
-        data,
-        [
-            "NetCashProvidedByUsedInOperatingActivities"
-        ]
-    )
-
-    capex_raw = get_metric(
-        data,
-        [
-            "PaymentsToAcquirePropertyPlantAndEquipment"
-        ]
-    )
-
-    cash_raw = get_metric(
-        data,
-        [
-            "CashAndCashEquivalentsAtCarryingValue"
-        ]
-    )
-
     # =====================================================
     # CLEAN
     # =====================================================
@@ -608,146 +581,17 @@ if st.button("Analyze"):
         revenue_raw
     )
 
-    operating_income = clean_annual(
-        operating_income_raw
-    )
-
-    gross_profit = clean_annual(
-        gross_profit_raw
-    )
-
-    net_income = clean_annual(
-        net_income_raw
-    )
-
-    operating_cf = clean_annual(
-        operating_cf_raw
-    )
-
-    capex = clean_annual(
-        capex_raw
-    )
-
-    cash = clean_annual(
-        cash_raw
-    )
-
-    # =====================================================
-    # QUARTERS
-    # =====================================================
-
     quarterly_revenue = build_quarters(
         revenue_raw
     )
-
-    # =====================================================
-    # GROWTH
-    # =====================================================
 
     revenue = add_growth(
         revenue
     )
 
-    # =====================================================
-    # LATEST VALUES
-    # =====================================================
-
     latest_revenue = latest(
         revenue
     )
-
-    latest_operating_income = latest(
-        operating_income
-    )
-
-    latest_gross_profit = latest(
-        gross_profit
-    )
-
-    latest_net_income = latest(
-        net_income
-    )
-
-    latest_ocf = latest(
-        operating_cf
-    )
-
-    latest_capex = latest(
-        capex
-    )
-
-    latest_cash = latest(
-        cash
-    )
-
-    # =====================================================
-    # FCF
-    # =====================================================
-
-    free_cash_flow = None
-
-    if (
-        latest_ocf is not None
-        and latest_capex is not None
-    ):
-
-        free_cash_flow = (
-            latest_ocf
-            - abs(latest_capex)
-        )
-
-    # =====================================================
-    # MARGINS
-    # =====================================================
-
-    operating_margin = None
-    gross_margin = None
-    net_margin = None
-    fcf_margin = None
-
-    if (
-        latest_revenue is not None
-        and latest_operating_income is not None
-    ):
-
-        operating_margin = (
-            latest_operating_income
-            / latest_revenue
-        ) * 100
-
-    if (
-        latest_revenue is not None
-        and latest_gross_profit is not None
-    ):
-
-        gross_margin = (
-            latest_gross_profit
-            / latest_revenue
-        ) * 100
-
-    if (
-        latest_revenue is not None
-        and latest_net_income is not None
-    ):
-
-        net_margin = (
-            latest_net_income
-            / latest_revenue
-        ) * 100
-
-    if (
-        latest_revenue is not None
-        and free_cash_flow is not None
-    ):
-
-        fcf_margin = (
-            free_cash_flow
-            / latest_revenue
-        ) * 100
-
-    # =====================================================
-    # GROWTH
-    # =====================================================
 
     latest_growth = None
 
@@ -758,22 +602,6 @@ if st.button("Analyze"):
         ]
 
     # =====================================================
-    # RULE OF 40
-    # =====================================================
-
-    rule_of_40 = None
-
-    if (
-        latest_growth is not None
-        and operating_margin is not None
-    ):
-
-        rule_of_40 = (
-            latest_growth
-            + operating_margin
-        )
-
-    # =====================================================
     # DISPLAY
     # =====================================================
 
@@ -781,7 +609,7 @@ if st.button("Analyze"):
         "Key Metrics"
     )
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
 
     with col1:
 
@@ -792,58 +620,12 @@ if st.button("Analyze"):
             else "N/A"
         )
 
+    with col2:
+
         st.metric(
             "Revenue Growth %",
             f"{latest_growth:.2f}%"
             if latest_growth is not None
-            else "N/A"
-        )
-
-    with col2:
-
-        st.metric(
-            "Operating Margin",
-            f"{operating_margin:.2f}%"
-            if operating_margin is not None
-            else "N/A"
-        )
-
-        st.metric(
-            "Gross Margin",
-            f"{gross_margin:.2f}%"
-            if gross_margin is not None
-            else "N/A"
-        )
-
-    with col3:
-
-        st.metric(
-            "Net Margin",
-            f"{net_margin:.2f}%"
-            if net_margin is not None
-            else "N/A"
-        )
-
-        st.metric(
-            "FCF Margin",
-            f"{fcf_margin:.2f}%"
-            if fcf_margin is not None
-            else "N/A"
-        )
-
-    with col4:
-
-        st.metric(
-            "Rule of 40",
-            f"{rule_of_40:.2f}"
-            if rule_of_40 is not None
-            else "N/A"
-        )
-
-        st.metric(
-            "Cash",
-            f"${latest_cash:,.0f}"
-            if latest_cash
             else "N/A"
         )
 
