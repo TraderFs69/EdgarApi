@@ -1,6 +1,6 @@
 # =========================================================
 # TEA Institutional SEC Scanner
-# FINAL VERSION - CORRECT Q4 LOGIC
+# STABLE CUMULATIVE QUARTER VERSION
 # =========================================================
 
 import streamlit as st
@@ -151,6 +151,7 @@ def clean_annual(df):
         if col not in df.columns:
             return None
 
+    # Only FY
     df = df[
         df["fp"] == "FY"
     ].copy()
@@ -158,6 +159,7 @@ def clean_annual(df):
     if len(df) == 0:
         return None
 
+    # Numeric
     df["val"] = pd.to_numeric(
         df["val"],
         errors="coerce"
@@ -167,21 +169,26 @@ def clean_annual(df):
         subset=["val"]
     )
 
+    # Filed date
     df["filed"] = pd.to_datetime(
         df["filed"]
     )
 
+    # Sort
     df = df.sort_values(
         ["fy", "filed"]
     )
 
+    # Keep newest filing
     df = df.drop_duplicates(
         subset=["fy"],
         keep="last"
     )
 
+    # Sort
     df = df.sort_values("fy")
 
+    # Last 5 years
     df = df.tail(5)
 
     return df
@@ -200,9 +207,7 @@ def build_quarters(df):
         "fy",
         "fp",
         "val",
-        "filed",
-        "start",
-        "end"
+        "filed"
     ]
 
     for col in required:
@@ -223,7 +228,7 @@ def build_quarters(df):
         return None
 
     # =====================================================
-    # CLEAN TYPES
+    # CLEAN
     # =====================================================
 
     df["val"] = pd.to_numeric(
@@ -237,17 +242,9 @@ def build_quarters(df):
         df["filed"]
     )
 
-    df["start"] = pd.to_datetime(
-        df["start"]
-    )
-
-    df["end"] = pd.to_datetime(
-        df["end"]
-    )
-
-    df["days"] = (
-        df["end"] - df["start"]
-    ).dt.days
+    # =====================================================
+    # SORT
+    # =====================================================
 
     df = df.sort_values(
         ["fy", "filed"]
@@ -263,7 +260,7 @@ def build_quarters(df):
 
     years = years[-5:]
 
-    current_date = pd.Timestamp.now()
+    current_year = pd.Timestamp.now().year
 
     for year in years:
 
@@ -271,164 +268,90 @@ def build_quarters(df):
             df["fy"] == year
         ].sort_values("filed")
 
-        quarter_values = {}
-
         # =================================================
-        # STORE PERIODS
+        # GET VALUES
         # =================================================
 
-        for period in ["Q1", "Q2", "Q3", "FY"]:
+        q1 = year_df[
+            year_df["fp"] == "Q1"
+        ]["val"]
 
-            subset = year_df[
-                year_df["fp"] == period
-            ]
+        q2 = year_df[
+            year_df["fp"] == "Q2"
+        ]["val"]
 
-            if len(subset) == 0:
-                continue
+        q3 = year_df[
+            year_df["fp"] == "Q3"
+        ]["val"]
 
-            row = subset.iloc[-1]
+        fy = year_df[
+            year_df["fp"] == "FY"
+        ]["val"]
 
-            quarter_values[period] = {
-                "value": row["val"],
-                "days": row["days"]
-            }
+        q1_val = (
+            q1.iloc[-1]
+            if len(q1)
+            else None
+        )
+
+        q2_ytd = (
+            q2.iloc[-1]
+            if len(q2)
+            else None
+        )
+
+        q3_ytd = (
+            q3.iloc[-1]
+            if len(q3)
+            else None
+        )
+
+        fy_val = (
+            fy.iloc[-1]
+            if len(fy)
+            else None
+        )
 
         # =================================================
-        # REAL QUARTERS
+        # TRUE QUARTERS
         # =================================================
 
-        real_q1 = None
+        real_q1 = q1_val
+
         real_q2 = None
         real_q3 = None
         real_q4 = None
 
-        # =================================================
-        # Q1
-        # =================================================
-
-        if "Q1" in quarter_values:
-
-            real_q1 = (
-                quarter_values["Q1"]["value"]
-            )
-
-        # =================================================
         # Q2
-        # =================================================
-
-        if "Q2" in quarter_values:
-
-            q2_val = (
-                quarter_values["Q2"]["value"]
-            )
-
-            q2_days = (
-                quarter_values["Q2"]["days"]
-            )
-
-            # Standalone
-            if q2_days <= 120:
-
-                real_q2 = q2_val
-
-            # Cumulative
-            else:
-
-                if real_q1 is not None:
-
-                    real_q2 = (
-                        q2_val - real_q1
-                    )
-
-        # =================================================
-        # Q3
-        # =================================================
-
-        if "Q3" in quarter_values:
-
-            q3_val = (
-                quarter_values["Q3"]["value"]
-            )
-
-            q3_days = (
-                quarter_values["Q3"]["days"]
-            )
-
-            # Standalone
-            if q3_days <= 120:
-
-                real_q3 = q3_val
-
-            # Cumulative
-            else:
-
-                q2_total = (
-                    quarter_values["Q2"]["value"]
-                    if "Q2" in quarter_values
-                    else None
-                )
-
-                if q2_total is not None:
-
-                    real_q3 = (
-                        q3_val - q2_total
-                    )
-
-        # =================================================
-        # Q4
-        # =================================================
-
         if (
-            "FY" in quarter_values
-            and year < current_date.year
+            q2_ytd is not None
+            and q1_val is not None
         ):
 
-            fy_val = (
-                quarter_values["FY"]["value"]
+            real_q2 = (
+                q2_ytd - q1_val
             )
 
-            if "Q3" in quarter_values:
+        # Q3
+        if (
+            q3_ytd is not None
+            and q2_ytd is not None
+        ):
 
-                q3_val = (
-                    quarter_values["Q3"]["value"]
-                )
+            real_q3 = (
+                q3_ytd - q2_ytd
+            )
 
-                q3_days = (
-                    quarter_values["Q3"]["days"]
-                )
+        # Q4
+        if (
+            fy_val is not None
+            and q3_ytd is not None
+            and year < current_year
+        ):
 
-                # =========================================
-                # Q3 STANDALONE
-                # =========================================
-
-                if q3_days <= 120:
-
-                    total = 0
-
-                    if real_q1 is not None:
-                        total += real_q1
-
-                    if real_q2 is not None:
-                        total += real_q2
-
-                    if real_q3 is not None:
-                        total += real_q3
-
-                    real_q4 = fy_val - total
-
-                # =========================================
-                # Q3 CUMULATIVE
-                # =========================================
-
-                else:
-
-                    real_q4 = (
-                        fy_val - q3_val
-                    )
-
-        # =================================================
-        # STORE QUARTERS
-        # =================================================
+            real_q4 = (
+                fy_val - q3_ytd
+            )
 
         quarters = {
             "Q1": real_q1,
@@ -437,29 +360,16 @@ def build_quarters(df):
             "Q4": real_q4
         }
 
+        # =================================================
+        # STORE
+        # =================================================
+
         for q, value in quarters.items():
 
             if (
                 value is None
                 or value <= 0
             ):
-                continue
-
-            quarter_month = {
-                "Q1": 3,
-                "Q2": 6,
-                "Q3": 9,
-                "Q4": 12
-            }[q]
-
-            quarter_date = pd.Timestamp(
-                year=int(year),
-                month=quarter_month,
-                day=1
-            )
-
-            # Avoid future quarters
-            if quarter_date > current_date:
                 continue
 
             rows.append({
@@ -537,6 +447,10 @@ ticker = st.text_input(
 )
 
 if st.button("Analyze"):
+
+    # =====================================================
+    # GET CIK
+    # =====================================================
 
     cik = get_cik_from_ticker(
         ticker
