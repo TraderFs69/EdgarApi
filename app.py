@@ -3,6 +3,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import plotly.express as px
 
 # =========================================================
 # CONFIG
@@ -13,7 +14,7 @@ HEADERS = {
 }
 
 st.set_page_config(
-    page_title="TEA SEC Fundamental Scanner",
+    page_title="TEA Institutional Fundamental Scanner",
     layout="wide"
 )
 
@@ -38,46 +39,6 @@ def get_cik_from_ticker(ticker):
 
 
 @st.cache_data
-def get_company_submissions(cik):
-
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-
-    response = requests.get(url, headers=HEADERS)
-
-    return response.json()
-
-
-def extract_filings(submissions):
-
-    recent = submissions["filings"]["recent"]
-
-    df = pd.DataFrame({
-        "Form": recent["form"],
-        "Filing Date": recent["filingDate"],
-        "Accession Number": recent["accessionNumber"],
-        "Primary Document": recent["primaryDocument"]
-    })
-
-    filings = df[
-        df["Form"].isin(["10-K", "10-Q"])
-    ]
-
-    return filings
-
-
-def build_filing_url(cik, accession, document):
-
-    accession_clean = accession.replace("-", "")
-
-    url = (
-        f"https://www.sec.gov/Archives/edgar/data/"
-        f"{int(cik)}/{accession_clean}/{document}"
-    )
-
-    return url
-
-
-@st.cache_data
 def get_company_facts(cik):
 
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -87,13 +48,7 @@ def get_company_facts(cik):
     return response.json()
 
 
-def extract_revenue_data(data):
-
-    possible_keys = [
-        "RevenueFromContractWithCustomerExcludingAssessedTax",
-        "SalesRevenueNet",
-        "Revenues"
-    ]
+def get_financial_metric(data, possible_keys):
 
     us_gaap = data["facts"]["us-gaap"]
 
@@ -101,132 +56,371 @@ def extract_revenue_data(data):
 
         if key in us_gaap:
 
-            revenues = us_gaap[key]["units"]["USD"]
+            try:
 
-            df = pd.DataFrame(revenues)
+                metric = us_gaap[key]["units"]["USD"]
 
-            columns_to_keep = []
+                df = pd.DataFrame(metric)
 
-            for col in ["fy", "fp", "frame", "val", "filed"]:
-                if col in df.columns:
-                    columns_to_keep.append(col)
+                return df
 
-            df = df[columns_to_keep]
-
-            return df
+            except:
+                pass
 
     return None
+
+
+def clean_annual_data(df):
+
+    if df is None:
+        return None
+
+    if "fp" not in df.columns:
+        return None
+
+    df = df[df["fp"] == "FY"].copy()
+
+    columns = []
+
+    for col in ["fy", "val", "filed"]:
+        if col in df.columns:
+            columns.append(col)
+
+    df = df[columns]
+
+    df = df.sort_values("fy")
+
+    df = df.drop_duplicates(subset=["fy"], keep="last")
+
+    return df
+
+
+def latest_value(df):
+
+    if df is None or len(df) == 0:
+        return None
+
+    return df.iloc[-1]["val"]
+
+
+def calculate_growth(df):
+
+    if df is None:
+        return None
+
+    df["Growth %"] = df["val"].pct_change() * 100
+
+    return df
 
 
 # =========================================================
 # UI
 # =========================================================
 
-st.title("TEA SEC Fundamental Scanner")
+st.title("TEA Institutional Fundamental Scanner")
 
 ticker = st.text_input(
-    "Enter Ticker",
+    "Ticker",
     value="NVDA"
 )
 
-if st.button("Analyze Company"):
+if st.button("Analyze"):
 
-    with st.spinner("Loading SEC data..."):
+    cik = get_cik_from_ticker(ticker)
 
-        # =================================================
-        # GET CIK
-        # =================================================
+    if cik is None:
 
-        cik = get_cik_from_ticker(ticker)
+        st.error("Ticker not found")
 
-        if cik is None:
+        st.stop()
 
-            st.error("Ticker not found.")
+    st.success(f"CIK: {cik}")
 
-            st.stop()
+    data = get_company_facts(cik)
 
-        st.success(f"CIK Found: {cik}")
+    # =====================================================
+    # EXTRACT METRICS
+    # =====================================================
 
-        # =================================================
-        # GET FILINGS
-        # =================================================
+    revenue = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
+                "SalesRevenueNet",
+                "Revenues"
+            ]
+        )
+    )
 
-        submissions = get_company_submissions(cik)
+    operating_income = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "OperatingIncomeLoss"
+            ]
+        )
+    )
 
-        filings = extract_filings(submissions)
+    net_income = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "NetIncomeLoss"
+            ]
+        )
+    )
 
-        # Keep only last 5 years approx
-        filings = filings.head(25)
+    gross_profit = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "GrossProfit"
+            ]
+        )
+    )
 
-        st.subheader("10-K and 10-Q Filings")
+    operating_cash_flow = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "NetCashProvidedByUsedInOperatingActivities"
+            ]
+        )
+    )
 
-        filings_display = filings.copy()
+    capex = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "PaymentsToAcquirePropertyPlantAndEquipment"
+            ]
+        )
+    )
 
-        filing_urls = []
+    assets = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "Assets"
+            ]
+        )
+    )
 
-        for _, row in filings.iterrows():
+    liabilities = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "Liabilities"
+            ]
+        )
+    )
 
-            filing_url = build_filing_url(
-                cik,
-                row["Accession Number"],
-                row["Primary Document"]
-            )
+    cash = clean_annual_data(
+        get_financial_metric(
+            data,
+            [
+                "CashAndCashEquivalentsAtCarryingValue"
+            ]
+        )
+    )
 
-            filing_urls.append(filing_url)
+    # =====================================================
+    # CALCULATIONS
+    # =====================================================
 
-        filings_display["SEC URL"] = filing_urls
+    latest_revenue = latest_value(revenue)
 
-        st.dataframe(
-            filings_display,
-            use_container_width=True
+    latest_operating_income = latest_value(operating_income)
+
+    latest_net_income = latest_value(net_income)
+
+    latest_gross_profit = latest_value(gross_profit)
+
+    latest_ocf = latest_value(operating_cash_flow)
+
+    latest_capex = latest_value(capex)
+
+    latest_assets = latest_value(assets)
+
+    latest_liabilities = latest_value(liabilities)
+
+    latest_cash = latest_value(cash)
+
+    free_cash_flow = None
+
+    if latest_ocf and latest_capex:
+
+        free_cash_flow = latest_ocf - abs(latest_capex)
+
+    # =====================================================
+    # MARGINS
+    # =====================================================
+
+    operating_margin = None
+    net_margin = None
+    gross_margin = None
+    fcf_margin = None
+
+    if latest_revenue and latest_operating_income:
+        operating_margin = (
+            latest_operating_income / latest_revenue
+        ) * 100
+
+    if latest_revenue and latest_net_income:
+        net_margin = (
+            latest_net_income / latest_revenue
+        ) * 100
+
+    if latest_revenue and latest_gross_profit:
+        gross_margin = (
+            latest_gross_profit / latest_revenue
+        ) * 100
+
+    if latest_revenue and free_cash_flow:
+        fcf_margin = (
+            free_cash_flow / latest_revenue
+        ) * 100
+
+    # =====================================================
+    # REVENUE GROWTH
+    # =====================================================
+
+    revenue = calculate_growth(revenue)
+
+    latest_growth = None
+
+    if revenue is not None:
+
+        latest_growth = revenue.iloc[-1]["Growth %"]
+
+    # =====================================================
+    # RULE OF 40
+    # =====================================================
+
+    rule_of_40 = None
+
+    if latest_growth and operating_margin:
+
+        rule_of_40 = (
+            latest_growth + operating_margin
         )
 
-        # =================================================
-        # COMPANY FACTS
-        # =================================================
+    # =====================================================
+    # SCORECARDS
+    # =====================================================
 
-        facts = get_company_facts(cik)
+    st.subheader("Key Metrics")
 
-        revenue_df = extract_revenue_data(facts)
+    col1, col2, col3, col4 = st.columns(4)
 
-        if revenue_df is not None:
+    with col1:
 
-            st.subheader("Revenue Data")
+        st.metric(
+            "Revenue",
+            f"${latest_revenue:,.0f}"
+            if latest_revenue else "N/A"
+        )
 
-            st.dataframe(
-                revenue_df,
-                use_container_width=True
-            )
+        st.metric(
+            "Revenue Growth %",
+            f"{latest_growth:.2f}%"
+            if latest_growth else "N/A"
+        )
 
-            # =============================================
-            # CALCULATE REVENUE GROWTH
-            # =============================================
+    with col2:
 
-            try:
+        st.metric(
+            "Operating Margin",
+            f"{operating_margin:.2f}%"
+            if operating_margin else "N/A"
+        )
 
-                annual_df = revenue_df[
-                    revenue_df["fp"] == "FY"
-                ].copy()
+        st.metric(
+            "Gross Margin",
+            f"{gross_margin:.2f}%"
+            if gross_margin else "N/A"
+        )
 
-                annual_df = annual_df.sort_values("fy")
+    with col3:
 
-                annual_df["Revenue Growth %"] = (
-                    annual_df["val"].pct_change() * 100
-                )
+        st.metric(
+            "Net Margin",
+            f"{net_margin:.2f}%"
+            if net_margin else "N/A"
+        )
 
-                st.subheader("Annual Revenue Growth")
+        st.metric(
+            "FCF Margin",
+            f"{fcf_margin:.2f}%"
+            if fcf_margin else "N/A"
+        )
 
-                st.dataframe(
-                    annual_df,
-                    use_container_width=True
-                )
+    with col4:
 
-            except:
+        st.metric(
+            "Rule of 40",
+            f"{rule_of_40:.2f}"
+            if rule_of_40 else "N/A"
+        )
 
-                st.warning(
-                    "Could not calculate revenue growth."
-                )
+        st.metric(
+            "Cash",
+            f"${latest_cash:,.0f}"
+            if latest_cash else "N/A"
+        )
 
-        else:
+    # =====================================================
+    # BALANCE SHEET
+    # =====================================================
 
-            st.warning("Revenue data not found.")
+    st.subheader("Balance Sheet")
+
+    balance_df = pd.DataFrame({
+        "Metric": [
+            "Assets",
+            "Liabilities",
+            "Cash",
+            "Free Cash Flow"
+        ],
+        "Value": [
+            latest_assets,
+            latest_liabilities,
+            latest_cash,
+            free_cash_flow
+        ]
+    })
+
+    st.dataframe(
+        balance_df,
+        use_container_width=True
+    )
+
+    # =====================================================
+    # REVENUE TABLE
+    # =====================================================
+
+    st.subheader("Revenue History")
+
+    st.dataframe(
+        revenue,
+        use_container_width=True
+    )
+
+    # =====================================================
+    # CHART
+    # =====================================================
+
+    chart_df = revenue.copy()
+
+    fig = px.line(
+        chart_df,
+        x="fy",
+        y="val",
+        title=f"{ticker} Revenue Growth"
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
