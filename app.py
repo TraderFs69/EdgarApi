@@ -1,12 +1,13 @@
 # =========================================================
 # export_all_xbrl.py
 # TEA Institutional Full XBRL Exporter
-# OPTIMIZED VERSION
+# STREAMLIT VERSION
 # =========================================================
 
 import pandas as pd
 import requests
 import os
+import streamlit as st
 
 # =========================================================
 # CONFIG
@@ -24,9 +25,51 @@ os.makedirs(
 )
 
 # =========================================================
+# STREAMLIT CONFIG
+# =========================================================
+
+st.set_page_config(
+    page_title="TEA XBRL Exporter",
+    layout="wide"
+)
+
+# =========================================================
+# STYLE
+# =========================================================
+
+st.markdown("""
+<style>
+
+.stApp {
+    background-color: #0e1117;
+    color: white;
+}
+
+h1, h2, h3 {
+    color: #ff8c00;
+}
+
+div[data-testid="stMetric"] {
+    background-color: #161b22;
+    border-radius: 12px;
+    padding: 10px;
+}
+
+.stButton button {
+    background-color: #ff8c00;
+    color: black;
+    border-radius: 8px;
+    font-weight: bold;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
 # GET CIK
 # =========================================================
 
+@st.cache_data
 def get_cik_from_ticker(ticker):
 
     url = "https://www.sec.gov/files/company_tickers.json"
@@ -53,6 +96,7 @@ def get_cik_from_ticker(ticker):
 # GET COMPANY FACTS
 # =========================================================
 
+@st.cache_data
 def get_company_facts(cik):
 
     url = (
@@ -74,7 +118,7 @@ def get_company_facts(cik):
 
 def export_all_xbrl(ticker):
 
-    print(f"\nExporting ALL XBRL data for {ticker}...\n")
+    st.write(f"## Exporting {ticker}")
 
     # =====================================================
     # GET CIK
@@ -86,10 +130,13 @@ def export_all_xbrl(ticker):
 
     if cik is None:
 
-        print("Ticker not found.")
-        return
+        st.error(
+            "Ticker not found."
+        )
 
-    print(f"CIK: {cik}")
+        return None, None
+
+    st.success(f"CIK: {cik}")
 
     # =====================================================
     # LOAD DATA
@@ -99,13 +146,19 @@ def export_all_xbrl(ticker):
 
     if "facts" not in data:
 
-        print("No facts section found.")
-        return
+        st.error(
+            "No facts section found."
+        )
+
+        return None, None
 
     if "us-gaap" not in data["facts"]:
 
-        print("No us-gaap section found.")
-        return
+        st.error(
+            "No us-gaap section found."
+        )
+
+        return None, None
 
     us_gaap = data["facts"]["us-gaap"]
 
@@ -117,6 +170,10 @@ def export_all_xbrl(ticker):
 
     metric_count = len(us_gaap)
 
+    progress_bar = st.progress(0)
+
+    status_text = st.empty()
+
     current_metric = 0
 
     # =====================================================
@@ -127,7 +184,11 @@ def export_all_xbrl(ticker):
 
         current_metric += 1
 
-        print(
+        progress = current_metric / metric_count
+
+        progress_bar.progress(progress)
+
+        status_text.text(
             f"[{current_metric}/{metric_count}] "
             f"{metric_name}"
         )
@@ -221,15 +282,15 @@ def export_all_xbrl(ticker):
 
                     if len(rows) > 500000:
 
-                        print(
-                            "\nSafety stop reached."
+                        st.warning(
+                            "Safety stop reached."
                         )
 
                         break
 
         except Exception as e:
 
-            print(
+            st.warning(
                 f"Error on metric "
                 f"{metric_name}: {e}"
             )
@@ -242,8 +303,11 @@ def export_all_xbrl(ticker):
 
     if len(df) == 0:
 
-        print("No data exported.")
-        return
+        st.error(
+            "No data exported."
+        )
+
+        return None, None
 
     # =====================================================
     # CLEAN DATES
@@ -293,21 +357,11 @@ def export_all_xbrl(ticker):
         index=False
     )
 
-    print("\n==============================")
-    print("RAW EXPORT COMPLETE")
-    print("==============================")
-
-    print(raw_path)
-
     # =====================================================
-    # CREATE CLEAN FINANCIALS
+    # CREATE CLEAN FILE
     # =====================================================
 
     clean_df = df.copy()
-
-    # =====================================================
-    # KEEP LATEST FILING
-    # =====================================================
 
     clean_df = clean_df.sort_values([
         "Metric",
@@ -327,20 +381,6 @@ def export_all_xbrl(ticker):
         keep="last"
     )
 
-    # =====================================================
-    # SORT AGAIN
-    # =====================================================
-
-    clean_df = clean_df.sort_values([
-        "Metric",
-        "FY",
-        "FP"
-    ])
-
-    # =====================================================
-    # EXPORT CLEAN
-    # =====================================================
-
     clean_path = os.path.join(
         OUTPUT_FOLDER,
         f"{ticker}_financials_clean.csv"
@@ -351,48 +391,112 @@ def export_all_xbrl(ticker):
         index=False
     )
 
-    print("\n==============================")
-    print("CLEAN EXPORT COMPLETE")
-    print("==============================")
-
-    print(clean_path)
-
     # =====================================================
     # SUMMARY
     # =====================================================
 
-    unique_metrics = (
-        clean_df["Metric"]
-        .nunique()
+    st.success(
+        "Export completed successfully."
     )
 
-    total_rows = len(clean_df)
+    col1, col2 = st.columns(2)
 
-    print("\n==============================")
-    print("EXPORT SUMMARY")
-    print("==============================")
+    with col1:
 
-    print(
-        f"Metrics exported: "
-        f"{unique_metrics}"
-    )
+        st.metric(
+            "Metrics Exported",
+            clean_df["Metric"].nunique()
+        )
 
-    print(
-        f"Rows exported: "
-        f"{total_rows:,}"
-    )
+    with col2:
 
-    print("==============================\n")
+        st.metric(
+            "Rows Exported",
+            f"{len(clean_df):,}"
+        )
+
+    return df, clean_df
 
 
 # =========================================================
-# MAIN
+# UI
 # =========================================================
 
-if __name__ == "__main__":
+st.title(
+    "TEA Institutional XBRL Exporter"
+)
 
-    ticker = input(
-        "Ticker: "
-    ).upper()
+st.markdown("""
+Export all available SEC XBRL financial data.
 
-    export_all_xbrl(ticker)
+Exports:
+- Full raw XBRL dataset
+- Clean institutional financials dataset
+""")
+
+tickers = st.text_area(
+    "Tickers (comma separated)",
+    value="NVDA"
+)
+
+# =========================================================
+# EXPORT BUTTON
+# =========================================================
+
+if st.button("Export XBRL Data"):
+
+    ticker_list = [
+        t.strip().upper()
+        for t in tickers.split(",")
+    ]
+
+    for ticker in ticker_list:
+
+        raw_df, clean_df = export_all_xbrl(
+            ticker
+        )
+
+        if clean_df is not None:
+
+            st.divider()
+
+            st.markdown(
+                f"## {ticker} Preview"
+            )
+
+            st.dataframe(
+                clean_df.head(50),
+                use_container_width=True
+            )
+
+            # =============================================
+            # DOWNLOAD BUTTONS
+            # =============================================
+
+            raw_csv = raw_df.to_csv(
+                index=False
+            ).encode("utf-8")
+
+            clean_csv = clean_df.to_csv(
+                index=False
+            ).encode("utf-8")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                st.download_button(
+                    label=f"Download {ticker} RAW CSV",
+                    data=raw_csv,
+                    file_name=f"{ticker}_all_xbrl.csv",
+                    mime="text/csv"
+                )
+
+            with col2:
+
+                st.download_button(
+                    label=f"Download {ticker} CLEAN CSV",
+                    data=clean_csv,
+                    file_name=f"{ticker}_financials_clean.csv",
+                    mime="text/csv"
+                )
